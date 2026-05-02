@@ -458,11 +458,7 @@ function bindEvents() {
         },
       });
       const hydrated = hydrateTodoFromServer(payload.todo);
-      if (editingId) {
-        updateTodo(hydrated);
-      } else {
-        state.todos.unshift(hydrated);
-      }
+      updateTodo(hydrated);
       state.lastSyncedAt = Date.now();
       if (state.detailTaskId === hydrated.id) {
         state.detailDraft = cloneTodoDraft(hydrated);
@@ -521,11 +517,7 @@ function bindEvents() {
           details: String(formData.get("details") || "").trim(),
         },
       });
-      if (editingId) {
-        state.plans = state.plans.map((plan) => (plan.id === payload.plan.id ? payload.plan : plan));
-      } else {
-        state.plans.push(payload.plan);
-      }
+      upsertPlan(payload.plan);
       state.lastSyncedAt = Date.now();
       form.reset();
       planEditorId.value = "";
@@ -1816,7 +1808,23 @@ function todosForDate(iso) {
 }
 
 function updateTodo(nextTodo) {
-  state.todos = state.todos.map((todo) => (todo.id === nextTodo.id ? nextTodo : todo));
+  if (!nextTodo || !nextTodo.id) {
+    return;
+  }
+  const exists = state.todos.some((todo) => todo.id === nextTodo.id);
+  state.todos = exists
+    ? state.todos.map((todo) => (todo.id === nextTodo.id ? nextTodo : todo))
+    : [nextTodo, ...state.todos];
+}
+
+function upsertPlan(nextPlan) {
+  if (!nextPlan || !nextPlan.id) {
+    return;
+  }
+  const exists = state.plans.some((plan) => plan.id === nextPlan.id);
+  state.plans = exists
+    ? state.plans.map((plan) => (plan.id === nextPlan.id ? nextPlan : plan))
+    : [...state.plans, nextPlan];
 }
 
 function currentTaskDone(id) {
@@ -2047,7 +2055,7 @@ async function handleQuickAdd(event) {
         done: false,
       },
     });
-    state.todos.unshift(hydrateTodoFromServer(payload.todo));
+    updateTodo(hydrateTodoFromServer(payload.todo));
     state.lastSyncedAt = Date.now();
     quickAddInput.value = "";
     render();
