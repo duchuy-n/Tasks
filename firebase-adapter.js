@@ -255,6 +255,43 @@
     };
   }
 
+  function timestampTextOrNow(value) {
+    const text = String(value || "");
+    return text.length >= 10 && text.length <= 40 ? text : nowIso();
+  }
+
+  function normalizeExistingTodoData(todoId, data = {}, overrides = {}) {
+    const dueDate = data.dueDate ? normalizeDateInput(data.dueDate) : null;
+    const dailyCompletedOn = data.dailyCompletedOn ? normalizeDateInput(data.dailyCompletedOn) : null;
+    let subtasks = [];
+    try {
+      subtasks = normalizeSubtasks(data.subtasks);
+    } catch {
+      subtasks = [];
+    }
+    const lane = LANE_SET.has(String(data.lane || "")) ? String(data.lane) : "ideas";
+    const priority = PRIORITY_SET.has(String(data.priority || "")) ? String(data.priority) : "medium";
+    const streak = Number(data.streak || 0);
+    const title = String(data.title || "").trim().slice(0, 160);
+    const normalized = {
+      id: todoId,
+      title: title.length >= 2 ? title : "Untitled task",
+      details: String(data.details || "").trim().slice(0, 5000),
+      subtasks,
+      dueDate: dueDate && isValidDate(dueDate) ? dueDate : null,
+      lane,
+      sortOrder: Number.isFinite(Number(data.sortOrder)) ? Number(data.sortOrder) : 0,
+      priority,
+      done: Boolean(data.done),
+      daily: Boolean(data.daily),
+      dailyCompletedOn: dailyCompletedOn && isValidDate(dailyCompletedOn) ? dailyCompletedOn : null,
+      streak: Number.isInteger(streak) && streak >= 0 && streak <= 100000 ? streak : 0,
+      createdAt: timestampTextOrNow(data.createdAt),
+      updatedAt: timestampTextOrNow(data.updatedAt),
+    };
+    return { ...normalized, ...overrides };
+  }
+
   async function ensureUserProfile(client, user, preferredName = "") {
     const ref = userRef(client, user.uid);
     const snapshot = await client.firestoreMod.getDoc(ref);
@@ -671,16 +708,15 @@
     if (!snapshot.exists()) {
       throw createError("Task not found.", 404);
     }
-    const previous = snapshot.data() || {};
+    const previous = normalizeExistingTodoData(todoId, snapshot.data() || {});
     const todo = {
       ...previous,
-      id: todoId,
-      lane: lane === "done" ? String(previous.lane || "ideas") : lane,
+      lane: lane === "done" ? previous.lane : lane,
       sortOrder: lane === "done" ? Number(previous.sortOrder || 0) : await nextSortOrder(client, user.uid, lane),
       done: lane === "done",
       updatedAt: nowIso(),
     };
-    await client.firestoreMod.setDoc(ref, todo, { merge: true });
+    await client.firestoreMod.setDoc(ref, todo);
     return { todo };
   }
 
@@ -694,8 +730,7 @@
       throw createError("Too many updates.", 400);
     }
     const user = await requireUser(client);
-    const batch = client.firestoreMod.writeBatch(client.db);
-    updates.forEach((item) => {
+    const normalizedUpdates = updates.map((item) => {
       if (!item || typeof item !== "object") {
         throw createError("Each update must be an object.", 400);
       }
@@ -709,12 +744,31 @@
       if (!LANE_SET.has(lane)) {
         throw createError("Lane is invalid.", 400);
       }
-      batch.update(todoDocRef(client, user.uid, todoId), {
+      return {
+        todoId,
         lane,
         sortOrder,
         done,
-        updatedAt: nowIso(),
-      });
+      };
+    });
+    const snapshots = await Promise.all(
+      normalizedUpdates.map((update) => client.firestoreMod.getDoc(todoDocRef(client, user.uid, update.todoId)))
+    );
+    const batch = client.firestoreMod.writeBatch(client.db);
+    normalizedUpdates.forEach((update, index) => {
+      const snapshot = snapshots[index];
+      if (!snapshot.exists()) {
+        throw createError("Task not found.", 404);
+      }
+      batch.set(
+        todoDocRef(client, user.uid, update.todoId),
+        normalizeExistingTodoData(update.todoId, snapshot.data() || {}, {
+          lane: update.lane,
+          sortOrder: update.sortOrder,
+          done: update.done,
+          updatedAt: nowIso(),
+        })
+      );
     });
     await batch.commit();
     const todos = await getAllTodos(client, user.uid);
