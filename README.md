@@ -20,6 +20,13 @@ For iPhone testing on the same Wi-Fi, open your Windows machine IP with port `41
 
 By default, the root app still uses the local Python API (`server.py`) and `data/planboard.db`.
 
+Run the validation suite with:
+
+```powershell
+npm run check
+npm test
+```
+
 ## Firebase + Vercel deploy
 
 The production static build can run directly against Firebase Auth + Firestore, so Vercel only needs to host the frontend.
@@ -95,10 +102,12 @@ For the Firebase/Vercel flow, keep `PLANBOARD_API_BASE_URL` empty and set `PLANB
 
 ```powershell
 docker build -t planboard-sync .
-docker run -p 4173:4173 -e PORT=4173 -e PLANBOARD_ALLOWED_ORIGINS="*" planboard-sync
+docker run -p 4173:4173 -e PORT=4173 -e PLANBOARD_ALLOWED_ORIGINS="https://your-app.example" planboard-sync
 ```
 
 For real internet deployment, use your domain and set `PLANBOARD_ALLOWED_ORIGINS` to the exact frontend origins you trust.
+
+Do not commit real environment files. Keep secrets and deployment values in `.env`, `.env.local`, or your hosting provider's environment settings; only `.env.example` belongs in Git.
 
 ## Cross-device sync
 

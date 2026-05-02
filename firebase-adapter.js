@@ -247,6 +247,9 @@
       sortOrder: Number.isFinite(Number(data.sortOrder)) ? Number(data.sortOrder) : 0,
       priority: String(data.priority || "medium"),
       done: Boolean(data.done),
+      daily: Boolean(data.daily),
+      dailyCompletedOn: data.dailyCompletedOn ? String(data.dailyCompletedOn) : null,
+      streak: Number.isFinite(Number(data.streak)) ? Number(data.streak) : 0,
       createdAt: String(data.createdAt || ""),
       updatedAt: String(data.updatedAt || ""),
     };
@@ -309,6 +312,39 @@
     };
   }
 
+  function serializeBootstrapSnapshots(user, snapshots) {
+    const serializedUser = snapshots.user && snapshots.user.exists()
+      ? serializeUserDoc(user.uid, user, snapshots.user.data())
+      : serializeUserDoc(user.uid, user, null);
+
+    const notes = snapshots.notes.docs
+      .map(serializeNoteDoc)
+      .sort((left, right) => left.noteDate.localeCompare(right.noteDate));
+
+    const plans = snapshots.plans.docs
+      .map(serializePlanDoc)
+      .sort((left, right) =>
+        left.planDate.localeCompare(right.planDate) ||
+        (left.timeLabel || "99:99").localeCompare(right.timeLabel || "99:99") ||
+        String(left.createdAt || "").localeCompare(String(right.createdAt || ""))
+      );
+
+    const todos = snapshots.todos.docs
+      .map(serializeTodoDoc)
+      .sort((left, right) =>
+        String(left.lane || "").localeCompare(String(right.lane || "")) ||
+        Number(left.sortOrder || 0) - Number(right.sortOrder || 0) ||
+        compareCreatedDesc(left, right)
+      );
+
+    return {
+      user: serializedUser,
+      notes,
+      plans,
+      todos,
+    };
+  }
+
   async function requireUser(client) {
     const user = await waitForAuthUser();
     if (!user) {
@@ -350,7 +386,7 @@
       return createError("Email is invalid.", 400);
     }
     if (code === "auth/weak-password") {
-      return createError("Password must be at least 6 characters.", 400);
+      return createError("Password must be at least 8 characters.", 400);
     }
     if (code === "auth/invalid-credential" || code === "auth/user-not-found" || code === "auth/wrong-password") {
       return createError("Email or password is incorrect.", 401);
@@ -379,8 +415,8 @@
     if (!email) {
       throw createError("Email is invalid.", 400);
     }
-    if (password.length < 6) {
-      throw createError("Password must be at least 6 characters.", 400);
+    if (password.length < 8) {
+      throw createError("Password must be at least 8 characters.", 400);
     }
 
     const credential = await client.authMod.createUserWithEmailAndPassword(client.auth, email, password);
@@ -519,7 +555,11 @@
     const dueDate = body.dueDate == null ? null : normalizeDateInput(body.dueDate) || null;
     const lane = String(body.lane || "ideas").trim().toLowerCase() || "ideas";
     const priority = String(body.priority || "medium").trim().toLowerCase();
-    const done = Boolean(body.done);
+    const daily = Boolean(body.daily);
+    const dailyCompletedOn = body.dailyCompletedOn == null ? null : normalizeDateInput(body.dailyCompletedOn) || null;
+    const streak = Number(body.streak || 0);
+    const finalLane = daily ? "today" : lane;
+    const done = daily ? false : Boolean(body.done);
     const subtasks = normalizeSubtasks(body.subtasks);
     const sortOrder = normalizeSortOrder(body.sortOrder, 0);
     if (title.length < 2) {
@@ -527,6 +567,12 @@
     }
     if (dueDate && !isValidDate(dueDate)) {
       throw createError("Due date is invalid.", 400);
+    }
+    if (dailyCompletedOn && !isValidDate(dailyCompletedOn)) {
+      throw createError("Daily completion date is invalid.", 400);
+    }
+    if (!Number.isInteger(streak) || streak < 0 || streak > 100000) {
+      throw createError("Streak is invalid.", 400);
     }
     if (!PRIORITY_SET.has(priority)) {
       throw createError("Priority is invalid.", 400);
@@ -544,10 +590,13 @@
       details,
       subtasks,
       dueDate,
-      lane,
-      sortOrder: sortOrder || await nextSortOrder(client, user.uid, lane),
+      lane: finalLane,
+      sortOrder: sortOrder || await nextSortOrder(client, user.uid, finalLane),
       priority,
       done,
+      daily,
+      dailyCompletedOn,
+      streak,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -562,7 +611,11 @@
     const dueDate = body.dueDate == null ? null : normalizeDateInput(body.dueDate) || null;
     const lane = String(body.lane || "ideas").trim().toLowerCase() || "ideas";
     const priority = String(body.priority || "medium").trim().toLowerCase();
-    const done = Boolean(body.done);
+    const daily = Boolean(body.daily);
+    const dailyCompletedOn = body.dailyCompletedOn == null ? null : normalizeDateInput(body.dailyCompletedOn) || null;
+    const streak = Number(body.streak || 0);
+    const finalLane = daily ? "today" : lane;
+    const done = daily ? false : Boolean(body.done);
     const subtasks = normalizeSubtasks(body.subtasks);
     const sortOrder = normalizeSortOrder(body.sortOrder, 0);
     if (title.length < 2) {
@@ -570,6 +623,12 @@
     }
     if (dueDate && !isValidDate(dueDate)) {
       throw createError("Due date is invalid.", 400);
+    }
+    if (dailyCompletedOn && !isValidDate(dailyCompletedOn)) {
+      throw createError("Daily completion date is invalid.", 400);
+    }
+    if (!Number.isInteger(streak) || streak < 0 || streak > 100000) {
+      throw createError("Streak is invalid.", 400);
     }
     if (!PRIORITY_SET.has(priority)) {
       throw createError("Priority is invalid.", 400);
@@ -591,10 +650,13 @@
       details,
       subtasks,
       dueDate,
-      lane,
-      sortOrder: sortOrder || await currentOrNextSortOrder(client, user.uid, todoId, lane),
+      lane: finalLane,
+      sortOrder: sortOrder || await currentOrNextSortOrder(client, user.uid, todoId, finalLane),
       priority,
       done,
+      daily,
+      dailyCompletedOn,
+      streak,
       createdAt: String(previous.createdAt || nowIso()),
       updatedAt: nowIso(),
     };
@@ -750,10 +812,67 @@
     }
   }
 
+  async function subscribeBootstrap(onPayload, onError) {
+    const client = await getClient();
+    if (!client) {
+      throw createError("Firebase adapter is disabled.", 500);
+    }
+    const user = await requireUser(client);
+    await ensureUserProfile(client, user);
+
+    const snapshots = {
+      user: null,
+      notes: null,
+      plans: null,
+      todos: null,
+    };
+    const unsubscriptions = [];
+    const emitIfReady = () => {
+      if (snapshots.user && snapshots.notes && snapshots.plans && snapshots.todos) {
+        onPayload(serializeBootstrapSnapshots(user, snapshots));
+      }
+    };
+    const handleError = (error) => {
+      if (typeof onError === "function") {
+        onError(mapFirebaseError(error));
+      }
+    };
+
+    unsubscriptions.push(
+      client.firestoreMod.onSnapshot(userRef(client, user.uid), (snapshot) => {
+        snapshots.user = snapshot;
+        emitIfReady();
+      }, handleError)
+    );
+    unsubscriptions.push(
+      client.firestoreMod.onSnapshot(notesRef(client, user.uid), (snapshot) => {
+        snapshots.notes = snapshot;
+        emitIfReady();
+      }, handleError)
+    );
+    unsubscriptions.push(
+      client.firestoreMod.onSnapshot(plansRef(client, user.uid), (snapshot) => {
+        snapshots.plans = snapshot;
+        emitIfReady();
+      }, handleError)
+    );
+    unsubscriptions.push(
+      client.firestoreMod.onSnapshot(todosRef(client, user.uid), (snapshot) => {
+        snapshots.todos = snapshot;
+        emitIfReady();
+      }, handleError)
+    );
+
+    return () => {
+      unsubscriptions.forEach((unsubscribe) => unsubscribe());
+    };
+  }
+
   window.PlanboardFirebaseAdapter = {
     isEnabled,
     getClient,
     waitForAuthUser,
     api,
+    subscribeBootstrap,
   };
 })();

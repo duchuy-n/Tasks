@@ -6,5 +6,9 @@ dist/
 dist-electron/
 release/
 .vercel/
+.test-data/
+.env
+.env.local
+.env.*.local
 *.log
 __pycache__/

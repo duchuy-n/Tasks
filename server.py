@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import sqlite3
+from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
 from hashlib import pbkdf2_hmac
 from http import HTTPStatus
@@ -19,7 +20,26 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "planboard.db"
 SESSION_DAYS = 30
-DEFAULT_ALLOWED_ORIGINS = os.getenv("PLANBOARD_ALLOWED_ORIGINS", "*")
+MAX_NAME_LENGTH = 80
+MAX_TITLE_LENGTH = 160
+MAX_DETAILS_LENGTH = 5000
+MAX_NOTE_LENGTH = 10000
+DEFAULT_ALLOWED_ORIGINS = os.getenv(
+    "PLANBOARD_ALLOWED_ORIGINS",
+    "http://127.0.0.1:4173,http://localhost:4173",
+)
+PUBLIC_FILES = {
+    "index.html",
+    "styles.css",
+    "planboard-domain.js",
+    "planboard-api-client.js",
+    "app.js",
+    "firebase-adapter.js",
+    "config.js",
+    "sw.js",
+    "manifest.webmanifest",
+}
+PUBLIC_ICON_SUFFIXES = {".svg", ".png", ".ico", ".webp"}
 
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 
@@ -36,10 +56,11 @@ def get_connection() -> sqlite3.Connection:
 
 def init_db() -> None:
     DATA_DIR.mkdir(exist_ok=True)
-    with get_connection() as connection:
-        connection.executescript(
-            """
-            PRAGMA journal_mode=WAL;
+    with closing(get_connection()) as connection:
+        with connection:
+            connection.executescript(
+                """
+                PRAGMA journal_mode=WAL;
 
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
@@ -90,44 +111,59 @@ def init_db() -> None:
                 sort_order REAL NOT NULL DEFAULT 0,
                 priority TEXT NOT NULL,
                 done INTEGER NOT NULL DEFAULT 0,
+                daily INTEGER NOT NULL DEFAULT 0,
+                daily_completed_on TEXT,
+                streak INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
-            """
-        )
-        todo_columns = {
-            row["name"] for row in connection.execute("PRAGMA table_info(todos)").fetchall()
-        }
-        if "lane" not in todo_columns:
-            connection.execute(
-                "ALTER TABLE todos ADD COLUMN lane TEXT NOT NULL DEFAULT 'ideas'"
-            )
-        if "subtasks" not in todo_columns:
-            connection.execute(
-                "ALTER TABLE todos ADD COLUMN subtasks TEXT NOT NULL DEFAULT '[]'"
-            )
-        if "sort_order" not in todo_columns:
-            connection.execute(
-                "ALTER TABLE todos ADD COLUMN sort_order REAL NOT NULL DEFAULT 0"
-            )
-            connection.execute(
-                """
-                WITH ranked AS (
-                    SELECT id, ROW_NUMBER() OVER (
-                        PARTITION BY user_id, COALESCE(NULLIF(lane, ''), 'ideas')
-                        ORDER BY COALESCE(due_date, '9999-12-31'), created_at DESC
-                    ) AS position
-                    FROM todos
-                )
-                UPDATE todos
-                SET sort_order = (
-                    SELECT position
-                    FROM ranked
-                    WHERE ranked.id = todos.id
-                )
                 """
             )
+            todo_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(todos)").fetchall()
+            }
+            if "lane" not in todo_columns:
+                connection.execute(
+                    "ALTER TABLE todos ADD COLUMN lane TEXT NOT NULL DEFAULT 'ideas'"
+                )
+            if "subtasks" not in todo_columns:
+                connection.execute(
+                    "ALTER TABLE todos ADD COLUMN subtasks TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "sort_order" not in todo_columns:
+                connection.execute(
+                    "ALTER TABLE todos ADD COLUMN sort_order REAL NOT NULL DEFAULT 0"
+                )
+                connection.execute(
+                    """
+                    WITH ranked AS (
+                        SELECT id, ROW_NUMBER() OVER (
+                            PARTITION BY user_id, COALESCE(NULLIF(lane, ''), 'ideas')
+                            ORDER BY COALESCE(due_date, '9999-12-31'), created_at DESC
+                        ) AS position
+                        FROM todos
+                    )
+                    UPDATE todos
+                    SET sort_order = (
+                        SELECT position
+                        FROM ranked
+                        WHERE ranked.id = todos.id
+                    )
+                    """
+                )
+            if "daily" not in todo_columns:
+                connection.execute(
+                    "ALTER TABLE todos ADD COLUMN daily INTEGER NOT NULL DEFAULT 0"
+                )
+            if "daily_completed_on" not in todo_columns:
+                connection.execute(
+                    "ALTER TABLE todos ADD COLUMN daily_completed_on TEXT"
+                )
+            if "streak" not in todo_columns:
+                connection.execute(
+                    "ALTER TABLE todos ADD COLUMN streak INTEGER NOT NULL DEFAULT 0"
+                )
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
@@ -177,6 +213,9 @@ def serialize_todo(row: sqlite3.Row) -> dict:
         "sortOrder": row["sort_order"] if row["sort_order"] is not None else 0,
         "priority": row["priority"],
         "done": bool(row["done"]),
+        "daily": bool(row["daily"]),
+        "dailyCompletedOn": row["daily_completed_on"],
+        "streak": row["streak"] if row["streak"] is not None else 0,
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
     }
@@ -314,6 +353,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_cors_headers()
+        self.send_security_headers()
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -389,7 +429,19 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         if requested == "/":
             requested = "/index.html"
         file_path = (BASE_DIR / requested.lstrip("/")).resolve()
-        if BASE_DIR not in file_path.parents and file_path != BASE_DIR / "index.html":
+        try:
+            relative_path = file_path.relative_to(BASE_DIR)
+        except ValueError:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        relative_parts = relative_path.parts
+        is_public_file = len(relative_parts) == 1 and relative_parts[0] in PUBLIC_FILES
+        is_public_icon = (
+            len(relative_parts) == 2
+            and relative_parts[0] == "icons"
+            and file_path.suffix.lower() in PUBLIC_ICON_SUFFIXES
+        )
+        if not is_public_file and not is_public_icon:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if not file_path.exists() or file_path.is_dir():
@@ -400,6 +452,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         content = file_path.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_cors_headers()
+        self.send_security_headers()
         self.send_header("Content-Type", mime or "application/octet-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Content-Length", str(len(content)))
@@ -408,15 +461,39 @@ class PlanboardHandler(BaseHTTPRequestHandler):
 
     def send_cors_headers(self) -> None:
         origin = self.headers.get("Origin", "")
-        allow_origin = DEFAULT_ALLOWED_ORIGINS
-        if DEFAULT_ALLOWED_ORIGINS != "*":
-          allowed = {item.strip() for item in DEFAULT_ALLOWED_ORIGINS.split(",") if item.strip()}
-          allow_origin = origin if origin in allowed else next(iter(allowed), "")
+        allowed = {item.strip() for item in DEFAULT_ALLOWED_ORIGINS.split(",") if item.strip()}
+        allow_origin = ""
+        if "*" in allowed:
+            allow_origin = "*"
+        elif origin and origin in allowed:
+            allow_origin = origin
         if allow_origin:
-          self.send_header("Access-Control-Allow-Origin", allow_origin)
-          self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Origin", allow_origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+
+    def send_security_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=(), payment=()",
+        )
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self' https://www.gstatic.com/firebasejs/; "
+            "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com "
+            "https://identitytoolkit.googleapis.com https://securetoken.googleapis.com "
+            "https://firestore.googleapis.com; "
+            "style-src 'self'; "
+            "img-src 'self' data:; "
+            "manifest-src 'self'; "
+            "base-uri 'self'; "
+            "frame-ancestors 'none'",
+        )
 
     def parse_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
@@ -454,6 +531,9 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         if len(name) < 2:
             self.respond_json({"error": "Display name is too short."}, HTTPStatus.BAD_REQUEST)
             return
+        if len(name) > MAX_NAME_LENGTH:
+            self.respond_json({"error": "Display name is too long."}, HTTPStatus.BAD_REQUEST)
+            return
         if "@" not in email:
             self.respond_json({"error": "Email is invalid."}, HTTPStatus.BAD_REQUEST)
             return
@@ -461,7 +541,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             self.respond_json({"error": "Password must be at least 8 characters."}, HTTPStatus.BAD_REQUEST)
             return
 
-        with get_connection() as connection:
+        with closing(get_connection()) as connection, connection:
             existing = connection.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
             if existing:
                 self.respond_json({"error": "Email is already registered."}, HTTPStatus.CONFLICT)
@@ -487,7 +567,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
 
         email = email_normalize(str(payload.get("email", "")))
         password = str(payload.get("password", ""))
-        with get_connection() as connection:
+        with closing(get_connection()) as connection, connection:
             user = connection.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
             if not user or not verify_password(password, user["password_hash"]):
                 self.respond_json({"error": "Email or password is incorrect."}, HTTPStatus.UNAUTHORIZED)
@@ -501,7 +581,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
     def handle_logout(self) -> None:
         header = self.headers.get("Authorization", "")
         token = header.removeprefix("Bearer ").strip() if header.startswith("Bearer ") else ""
-        with get_connection() as connection:
+        with closing(get_connection()) as connection, connection:
             if token:
                 connection.execute("DELETE FROM sessions WHERE token = ?", (token,))
         self.respond_json({"ok": True})
@@ -536,6 +616,10 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         except PermissionError:
             return
         content = str(payload.get("content", "")).strip()
+        if len(content) > MAX_NOTE_LENGTH:
+            self.respond_json({"error": "Note is too long."}, HTTPStatus.BAD_REQUEST)
+            connection.close()
+            return
         with connection:
             if content:
                 note_id = str(uuid4())
@@ -574,6 +658,12 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
         if len(title) < 2:
             self.respond_json({"error": "Plan title is too short."}, HTTPStatus.BAD_REQUEST)
+            return
+        if len(title) > MAX_TITLE_LENGTH:
+            self.respond_json({"error": "Plan title is too long."}, HTTPStatus.BAD_REQUEST)
+            return
+        if len(details) > MAX_DETAILS_LENGTH:
+            self.respond_json({"error": "Plan details are too long."}, HTTPStatus.BAD_REQUEST)
             return
         try:
             connection, user = self.auth_user()
@@ -623,6 +713,12 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         if len(title) < 2:
             self.respond_json({"error": "Plan title is too short."}, HTTPStatus.BAD_REQUEST)
             return
+        if len(title) > MAX_TITLE_LENGTH:
+            self.respond_json({"error": "Plan title is too long."}, HTTPStatus.BAD_REQUEST)
+            return
+        if len(details) > MAX_DETAILS_LENGTH:
+            self.respond_json({"error": "Plan details are too long."}, HTTPStatus.BAD_REQUEST)
+            return
         try:
             connection, user = self.auth_user()
         except PermissionError:
@@ -660,14 +756,31 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         due_date = due_date or None
         lane = str(payload.get("lane", "ideas")).strip().lower() or "ideas"
         priority = str(payload.get("priority", "medium")).strip().lower()
+        daily = 1 if bool(payload.get("daily")) else 0
+        daily_completed_on = str(payload.get("dailyCompletedOn") or "").strip() or None
         try:
             subtasks = normalize_subtasks(payload.get("subtasks"))
             sort_order = normalize_sort_order(payload.get("sortOrder"), 0)
+            streak = int(payload.get("streak") or 0)
         except ValueError as error:
             self.respond_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
             return
+        if daily:
+            lane = "today"
+        if daily_completed_on and not is_valid_date(daily_completed_on):
+            self.respond_json({"error": "Daily completion date is invalid."}, HTTPStatus.BAD_REQUEST)
+            return
+        if streak < 0 or streak > 100000:
+            self.respond_json({"error": "Streak is invalid."}, HTTPStatus.BAD_REQUEST)
+            return
         if len(title) < 2:
             self.respond_json({"error": "Task title is too short."}, HTTPStatus.BAD_REQUEST)
+            return
+        if len(title) > MAX_TITLE_LENGTH:
+            self.respond_json({"error": "Task title is too long."}, HTTPStatus.BAD_REQUEST)
+            return
+        if len(details) > MAX_DETAILS_LENGTH:
+            self.respond_json({"error": "Task details are too long."}, HTTPStatus.BAD_REQUEST)
             return
         if due_date and not is_valid_date(due_date):
             self.respond_json({"error": "Due date is invalid."}, HTTPStatus.BAD_REQUEST)
@@ -689,8 +802,8 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             final_sort_order = sort_order if sort_order else self.next_sort_order(connection, user["id"], lane)
             connection.execute(
                 """
-                INSERT INTO todos (id, user_id, title, details, subtasks, due_date, lane, sort_order, priority, done, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                INSERT INTO todos (id, user_id, title, details, subtasks, due_date, lane, sort_order, priority, done, daily, daily_completed_on, streak, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     todo_id,
@@ -702,6 +815,9 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                     lane,
                     final_sort_order,
                     priority,
+                    daily,
+                    daily_completed_on,
+                    streak,
                     timestamp,
                     timestamp,
                 ),
@@ -724,14 +840,32 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         lane = str(payload.get("lane", "ideas")).strip().lower() or "ideas"
         priority = str(payload.get("priority", "medium")).strip().lower()
         done = 1 if bool(payload.get("done")) else 0
+        daily = 1 if bool(payload.get("daily")) else 0
+        daily_completed_on = str(payload.get("dailyCompletedOn") or "").strip() or None
         try:
             subtasks = normalize_subtasks(payload.get("subtasks"))
             sort_order = normalize_sort_order(payload.get("sortOrder"), 0)
+            streak = int(payload.get("streak") or 0)
         except ValueError as error:
             self.respond_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
             return
+        if daily:
+            lane = "today"
+            done = 0
+        if daily_completed_on and not is_valid_date(daily_completed_on):
+            self.respond_json({"error": "Daily completion date is invalid."}, HTTPStatus.BAD_REQUEST)
+            return
+        if streak < 0 or streak > 100000:
+            self.respond_json({"error": "Streak is invalid."}, HTTPStatus.BAD_REQUEST)
+            return
         if len(title) < 2:
             self.respond_json({"error": "Task title is too short."}, HTTPStatus.BAD_REQUEST)
+            return
+        if len(title) > MAX_TITLE_LENGTH:
+            self.respond_json({"error": "Task title is too long."}, HTTPStatus.BAD_REQUEST)
+            return
+        if len(details) > MAX_DETAILS_LENGTH:
+            self.respond_json({"error": "Task details are too long."}, HTTPStatus.BAD_REQUEST)
             return
         if due_date and not is_valid_date(due_date):
             self.respond_json({"error": "Due date is invalid."}, HTTPStatus.BAD_REQUEST)
@@ -751,7 +885,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             connection.execute(
                 """
                 UPDATE todos
-                SET title = ?, details = ?, subtasks = ?, due_date = ?, lane = ?, sort_order = ?, priority = ?, done = ?, updated_at = ?
+                SET title = ?, details = ?, subtasks = ?, due_date = ?, lane = ?, sort_order = ?, priority = ?, done = ?, daily = ?, daily_completed_on = ?, streak = ?, updated_at = ?
                 WHERE id = ? AND user_id = ?
                 """,
                 (
@@ -763,6 +897,9 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                     sort_order if sort_order else self.current_or_next_sort_order(connection, user["id"], todo_id, lane),
                     priority,
                     done,
+                    daily,
+                    daily_completed_on,
+                    streak,
                     now_iso(),
                     todo_id,
                     user["id"],
@@ -887,6 +1024,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         content = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_cors_headers()
+        self.send_security_headers()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(content)))

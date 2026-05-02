@@ -85,130 +85,57 @@
           <span class="sidebar-list-item__label">Task list</span>
           <span id="openTaskCount" class="sidebar-list-item__count">0</span>
         </div>
-        <div class="sidebar-list-item">
-          <span class="sidebar-list-item__dot sidebar-list-item__dot--gray"></span>
-          <span class="sidebar-list-item__label">Daily notes</span>
-          <span id="noteCount" class="sidebar-list-item__count">0</span>
-        </div>
-        <div class="sidebar-list-item">
-          <span class="sidebar-list-item__dot sidebar-list-item__dot--yellow"></span>
-          <span class="sidebar-list-item__label">Today plans</span>
-          <span id="planCount" class="sidebar-list-item__count">0</span>
-        </div>
+        <details class="sidebar-more-tools">
+          <summary>Planning tools</summary>
+          <div class="sidebar-more-tools__body">
+            <div class="sidebar-list-item sidebar-list-item--subtle">
+              <span class="sidebar-list-item__dot sidebar-list-item__dot--gray"></span>
+              <span class="sidebar-list-item__label">Daily notes</span>
+              <span id="noteCount" class="sidebar-list-item__count">0</span>
+            </div>
+            <div class="sidebar-list-item sidebar-list-item--subtle">
+              <span class="sidebar-list-item__dot sidebar-list-item__dot--yellow"></span>
+              <span class="sidebar-list-item__label">Today plans</span>
+              <span id="planCount" class="sidebar-list-item__count">0</span>
+            </div>
+          </div>
+        </details>
       </section>
 
-      <section class="sidebar-panel sidebar-panel--controls">
-        <p class="sidebar-panel__title">Board tools</p>
+      <details class="sidebar-panel sidebar-panel--controls sidebar-panel--collapsed">
+        <summary class="sidebar-panel__summary">Tools</summary>
+        <div class="sidebar-panel__body">
+          <div class="filter-chips filter-chips--sidebar" role="tablist" aria-label="Task filters">
+            <button id="filterAllButton" class="chip is-active" type="button">All</button>
+            <button id="filterTodayButton" class="chip" type="button">Today</button>
+            <button id="filterOverdueButton" class="chip" type="button">Overdue</button>
+            <button id="filterHighButton" class="chip" type="button">High Priority</button>
+          </div>
 
-        <div class="filter-chips filter-chips--sidebar" role="tablist" aria-label="Task filters">
-          <button id="filterAllButton" class="chip is-active" type="button">All</button>
-          <button id="filterTodayButton" class="chip" type="button">Today</button>
-          <button id="filterOverdueButton" class="chip" type="button">Overdue</button>
-          <button id="filterHighButton" class="chip" type="button">High Priority</button>
-        </div>
-
-        <form id="quickAddForm" class="quick-add quick-add--sidebar" autocomplete="off">
-          <input id="quickAddInput" type="text" maxlength="80" placeholder="Quick add a task">
-          <div class="quick-add__row">
-            <select id="quickAddLaneInput" aria-label="Quick add lane">
-              <option value="ideas">Ideas</option>
-              <option value="month">This Month</option>
-              <option value="week">This Week</option>
-              <option value="today">Today</option>
+          <label class="sort-control sort-control--sidebar">
+            <span>Sort</span>
+            <select id="sortSelect">
+              <option value="manual">Default</option>
+              <option value="due">Due Soon</option>
+              <option value="priority">Priority</option>
+              <option value="newest">Newest</option>
             </select>
-            <button class="toolbar-button toolbar-button--primary" type="submit">Add</button>
-          </div>
-        </form>
+          </label>
 
-        <label class="sort-control sort-control--sidebar">
-          <span>Sort</span>
-          <select id="sortSelect">
-            <option value="manual">Default</option>
-            <option value="due">Due Soon</option>
-            <option value="priority">Priority</option>
-            <option value="newest">Newest</option>
-          </select>
-        </label>
+          <button id="themeToggleButton" class="toolbar-button toolbar-button--sidebar" type="button">Light Mode</button>
+          <button id="notificationButton" class="toolbar-button toolbar-button--sidebar" type="button">Enable Alerts</button>
 
-        <button id="themeToggleButton" class="toolbar-button toolbar-button--sidebar" type="button">Light Mode</button>
-        <button id="notificationButton" class="toolbar-button toolbar-button--sidebar" type="button">Enable Alerts</button>
-
-        <p id="filterStateLabel" class="board-filter-state board-filter-state--sidebar" aria-live="polite"></p>
-      </section>
-
-      <aside id="taskDetailPanel" class="task-detail task-detail--hidden" aria-hidden="true">
-        <div class="task-detail__header">
-          <div>
-            <p class="eyebrow">Task</p>
-            <h2 id="detailHeading">Task details</h2>
-            <p id="detailSaveState" class="task-detail__save-state">Pick a task to inspect and edit inline.</p>
-          </div>
-          <button id="closeTaskDetailButton" class="tool-icon" type="button" aria-label="Close task details">&times;</button>
+          <p id="filterStateLabel" class="board-filter-state board-filter-state--sidebar" aria-live="polite"></p>
         </div>
+      </details>
 
-        <div id="taskDetailEmpty" class="task-detail__empty">
-          <p>Select a task to edit it inline, manage subtasks, and move it without opening another modal.</p>
+      <aside class="deadline-timeline sidebar-deadlines">
+        <div class="deadline-timeline__header">
+          <p class="eyebrow">Deadlines</p>
+          <h2 id="calendarSelectedDateLabel">Selected day</h2>
+          <p id="calendarSelectedDateMeta" class="deadline-timeline__meta">0 tasks</p>
         </div>
-
-        <form id="taskDetailForm" class="task-detail__form task-detail__form--hidden">
-          <input id="detailTaskId" type="hidden">
-
-          <label class="field">
-            <span>Title</span>
-            <input id="detailTitleInput" type="text" maxlength="80" placeholder="Task title">
-          </label>
-
-          <label class="field">
-            <span>Details</span>
-            <textarea id="detailDetailsInput" rows="4" maxlength="400" placeholder="Short description"></textarea>
-          </label>
-
-          <div class="composer-grid">
-            <label class="field">
-              <span>Lane</span>
-              <select id="detailLaneInput">
-                <option value="ideas">Ideas</option>
-                <option value="month">This Month</option>
-                <option value="week">This Week</option>
-                <option value="today">Today</option>
-                <option value="done">Completed</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Priority</span>
-              <select id="detailPriorityInput">
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-                <option value="low">Low</option>
-              </select>
-            </label>
-          </div>
-
-          <label class="field">
-            <span>Deadline</span>
-            <input id="detailDueDateInput" type="date">
-          </label>
-
-          <section class="task-detail__section">
-            <div class="task-detail__section-header">
-              <h3>Checklist</h3>
-              <div class="task-detail__section-tools">
-                <span id="detailSubtaskMeta" class="task-detail__section-meta">0 items</span>
-                <button id="toggleCompletedSubtasksButton" class="plain-link task-detail__toggle-completed" type="button" hidden>Show completed</button>
-              </div>
-            </div>
-            <ul id="detailSubtaskList" class="subtask-list"></ul>
-            <div class="subtask-composer">
-              <input id="detailSubtaskInput" type="text" maxlength="120" placeholder="Add a subtask">
-              <button id="addDetailSubtaskButton" class="button" type="button">Add</button>
-            </div>
-          </section>
-
-          <div class="task-detail__actions">
-            <button id="toggleTaskDoneButton" class="toolbar-button" type="button">Mark Done</button>
-            <button id="deleteTaskButton" class="toolbar-button" type="button">Delete</button>
-          </div>
-        </form>
+        <div id="calendarTimelineList" class="deadline-timeline__list"></div>
       </aside>
 
       <section class="sidebar-meta">
@@ -234,6 +161,10 @@
       <header class="board-header">
         <div class="board-header__copy">
           <h1>Tasks</h1>
+          <div class="view-switcher" role="tablist" aria-label="Primary view">
+            <button id="boardViewButton" class="chip is-active" type="button">Board</button>
+            <button id="calendarViewButton" class="chip" type="button">Calendar</button>
+          </div>
           <p class="board-header__meta">
             <span id="completedMeta">0 completed</span>
             <button id="clearCompletedButton" class="clear-link" type="button">Clear</button>
@@ -253,7 +184,7 @@
 
       <p id="statusMessage" class="message message--inline" aria-live="polite"></p>
 
-      <section class="columns">
+      <section id="boardView" class="columns board-view board-view--board">
         <article class="column" data-lane="ideas">
           <div class="column__header">
             <h2>Ideas</h2>
@@ -294,6 +225,46 @@
           <div id="lane-done" class="column__body"></div>
         </article>
       </section>
+
+      <section id="calendarView" class="calendar-page board-view board-view--calendar board-view--hidden">
+        <section class="calendar-month">
+          <div class="calendar-month__toolbar">
+            <div>
+              <p class="eyebrow">Calendar</p>
+              <h2 id="calendarMonthHeading">Month</h2>
+            </div>
+            <div class="calendar-month__controls">
+              <button id="calendarPrevYearButton" class="tool-icon" type="button" aria-label="Previous year">&lsaquo;</button>
+              <span id="calendarYearLabel" class="calendar-month__year">2026</span>
+              <button id="calendarNextYearButton" class="tool-icon" type="button" aria-label="Next year">&rsaquo;</button>
+              <select id="calendarMonthSelect" aria-label="Calendar month">
+                <option value="0">January</option>
+                <option value="1">February</option>
+                <option value="2">March</option>
+                <option value="3">April</option>
+                <option value="4">May</option>
+                <option value="5">June</option>
+                <option value="6">July</option>
+                <option value="7">August</option>
+                <option value="8">September</option>
+                <option value="9">October</option>
+                <option value="10">November</option>
+                <option value="11">December</option>
+              </select>
+            </div>
+          </div>
+          <div class="calendar-weekdays" aria-hidden="true">
+            <span>Mon</span>
+            <span>Tue</span>
+            <span>Wed</span>
+            <span>Thu</span>
+            <span>Fri</span>
+            <span>Sat</span>
+            <span>Sun</span>
+          </div>
+          <div id="calendarGrid" class="calendar-grid"></div>
+        </section>
+      </section>
     </main>
 
     <nav class="mobile-tabbar" aria-label="Mobile sections">
@@ -304,6 +275,88 @@
       <button class="mobile-tabbar__button" type="button" data-mobile-view="done">Done</button>
       <button class="mobile-tabbar__button" type="button" data-mobile-view="boardtools">Tools</button>
     </nav>
+  </div>
+
+  <div id="taskDetailOverlay" class="task-detail-overlay task-detail-overlay--hidden" aria-hidden="true">
+    <aside id="taskDetailPanel" class="task-detail task-detail--hidden" aria-hidden="true">
+      <div class="task-detail__header">
+        <div>
+          <p class="eyebrow">Task</p>
+          <h2 id="detailHeading">Task details</h2>
+          <p id="detailSaveState" class="task-detail__save-state">Pick a task to inspect and edit.</p>
+        </div>
+        <button id="closeTaskDetailButton" class="tool-icon" type="button" aria-label="Close task details">&times;</button>
+      </div>
+
+      <div id="taskDetailEmpty" class="task-detail__empty">
+        <p>Select a task to edit it, manage subtasks, and move it without leaving the board.</p>
+      </div>
+
+      <form id="taskDetailForm" class="task-detail__form task-detail__form--hidden">
+        <input id="detailTaskId" type="hidden">
+
+        <label class="field">
+          <span>Title</span>
+          <input id="detailTitleInput" type="text" maxlength="80" placeholder="Task title">
+        </label>
+
+        <label class="field">
+          <span>Details</span>
+          <textarea id="detailDetailsInput" rows="4" maxlength="400" placeholder="Short description"></textarea>
+        </label>
+
+        <div class="composer-grid">
+          <label class="field">
+            <span>Lane</span>
+            <select id="detailLaneInput">
+              <option value="ideas">Ideas</option>
+              <option value="month">This Month</option>
+              <option value="week">This Week</option>
+              <option value="today">Today</option>
+              <option value="done">Completed</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Priority</span>
+            <select id="detailPriorityInput">
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="field">
+          <span>Deadline</span>
+          <input id="detailDueDateInput" type="date">
+        </label>
+
+        <label class="check-field">
+          <input id="detailDailyInput" type="checkbox">
+          <span>Daily task</span>
+        </label>
+
+        <section class="task-detail__section">
+          <div class="task-detail__section-header">
+            <h3>Checklist</h3>
+            <div class="task-detail__section-tools">
+              <span id="detailSubtaskMeta" class="task-detail__section-meta">0 items</span>
+              <button id="toggleCompletedSubtasksButton" class="plain-link task-detail__toggle-completed" type="button" hidden>Show completed</button>
+            </div>
+          </div>
+          <ul id="detailSubtaskList" class="subtask-list"></ul>
+          <div class="subtask-composer">
+            <input id="detailSubtaskInput" type="text" maxlength="120" placeholder="Add a subtask">
+            <button id="addDetailSubtaskButton" class="button" type="button">Add</button>
+          </div>
+        </section>
+
+        <div class="task-detail__actions">
+          <button id="toggleTaskDoneButton" class="toolbar-button" type="button">Mark Done</button>
+          <button id="deleteTaskButton" class="toolbar-button" type="button">Delete</button>
+        </div>
+      </form>
+    </aside>
   </div>
 
   <div id="taskActionOverlay" class="task-action-overlay task-action-overlay--hidden" aria-hidden="true">
@@ -340,8 +393,13 @@
 
       <div class="composer-tabs">
         <button id="tabTaskButton" class="chip is-active" type="button">Task</button>
-        <button id="tabNoteButton" class="chip" type="button">Note</button>
-        <button id="tabPlanButton" class="chip" type="button">Plan</button>
+        <details id="composerMoreDetails" class="composer-more">
+          <summary class="chip">More</summary>
+          <div class="composer-more__body">
+            <button id="tabNoteButton" class="chip" type="button">Note</button>
+            <button id="tabPlanButton" class="chip" type="button">Plan</button>
+          </div>
+        </details>
       </div>
 
       <form id="taskComposerForm" class="composer-form">
@@ -358,6 +416,7 @@
           <label class="field">
             <span>Starting lane</span>
             <select id="todoLaneInput" name="lane">
+              <option value="">None</option>
               <option value="ideas">Ideas</option>
               <option value="month">This Month</option>
               <option value="week">This Week</option>
@@ -376,6 +435,10 @@
         <label class="field">
           <span>Deadline (optional)</span>
           <input id="todoDueDateInput" name="dueDate" type="date">
+        </label>
+        <label class="check-field">
+          <input id="todoDailyInput" name="daily" type="checkbox">
+          <span>Daily task</span>
         </label>
         <button id="taskSubmitButton" class="button button--primary" type="submit">Add Task</button>
       </form>
@@ -432,6 +495,7 @@
           <span class="task-card__due"></span>
           <span class="task-card__priority"></span>
           <span class="task-card__subtasks"></span>
+          <span class="task-card__streak"></span>
         </div>
       </div>
     </article>
@@ -452,6 +516,8 @@
   </template>
 
   <script src="config.js"></script>
+  <script src="planboard-domain.js"></script>
+  <script src="planboard-api-client.js"></script>
   <script src="firebase-adapter.js"></script>
   <script src="app.js"></script>
 </body>

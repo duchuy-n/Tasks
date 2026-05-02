@@ -4,3 +4,8 @@ native-web
 data
 __pycache__
 ios
+.git
+.env
+.env.local
+.env.*.local
+*.log

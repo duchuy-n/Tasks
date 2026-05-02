@@ -1,14 +1,17 @@
 ﻿const APP_CONFIG = window.__PLANBOARD_CONFIG__ || {};
 const DATA_SOURCE = APP_CONFIG.DATA_SOURCE || "rest";
+const PLANBOARD_DOMAIN = window.PlanboardDomain || {};
 const FIREBASE_ADAPTER = window.PlanboardFirebaseAdapter || null;
-const USE_FIREBASE = DATA_SOURCE === "firebase";
-const API_BASE = `${(APP_CONFIG.API_BASE_URL || "").replace(/\/$/, "")}/api`;
+const API_CLIENT = window.PlanboardApiClient
+  ? window.PlanboardApiClient.create({ config: APP_CONFIG, firebaseAdapter: FIREBASE_ADAPTER })
+  : null;
+const USE_FIREBASE = API_CLIENT ? API_CLIENT.useFirebase : DATA_SOURCE === "firebase";
 const AUTO_SYNC_MS = 15000;
 const TOKEN_KEY = "planboard-token";
 const UI_KEY = "planboard-ui";
 const NOTIFICATION_KEY = "planboard-notified";
-const LANES = ["ideas", "month", "week", "today", "done"];
-const LANE_PREFIX = /^\[\[lane:(ideas|month|week|today|done)\]\]\s*/i;
+const LANES = PLANBOARD_DOMAIN.LANES || ["ideas", "month", "week", "today", "done"];
+const LANE_PREFIX = PLANBOARD_DOMAIN.LANE_PREFIX || /^\[\[lane:(ideas|month|week|today|done)\]\]\s*/i;
 
 const DAY_FORMATTER = new Intl.DateTimeFormat("en-US", {
   weekday: "long",
@@ -44,6 +47,19 @@ const completedMeta = document.querySelector("#completedMeta");
 const clearCompletedButton = document.querySelector("#clearCompletedButton");
 const allTaskCountBadge = document.querySelector("#allTaskCountBadge");
 const allTaskCountHeader = document.querySelector("#allTaskCountHeader");
+const boardViewButton = document.querySelector("#boardViewButton");
+const calendarViewButton = document.querySelector("#calendarViewButton");
+const boardView = document.querySelector("#boardView");
+const calendarView = document.querySelector("#calendarView");
+const calendarSelectedDateLabel = document.querySelector("#calendarSelectedDateLabel");
+const calendarSelectedDateMeta = document.querySelector("#calendarSelectedDateMeta");
+const calendarTimelineList = document.querySelector("#calendarTimelineList");
+const calendarMonthHeading = document.querySelector("#calendarMonthHeading");
+const calendarMonthSelect = document.querySelector("#calendarMonthSelect");
+const calendarYearLabel = document.querySelector("#calendarYearLabel");
+const calendarPrevYearButton = document.querySelector("#calendarPrevYearButton");
+const calendarNextYearButton = document.querySelector("#calendarNextYearButton");
+const calendarGrid = document.querySelector("#calendarGrid");
 const openTaskCount = document.querySelector("#openTaskCount");
 const noteCount = document.querySelector("#noteCount");
 const planCount = document.querySelector("#planCount");
@@ -60,6 +76,7 @@ const planList = document.querySelector("#planList");
 const todoLaneInput = document.querySelector("#todoLaneInput");
 const todoPriorityInput = document.querySelector("#todoPriorityInput");
 const todoDueDateInput = document.querySelector("#todoDueDateInput");
+const todoDailyInput = document.querySelector("#todoDailyInput");
 const todoTitleInput = document.querySelector("#todoTitleInput");
 const planTitleInput = document.querySelector("#planTitleInput");
 const planDetailsInput = document.querySelector("#planDetailsInput");
@@ -77,6 +94,7 @@ const sortSelect = document.querySelector("#sortSelect");
 const themeToggleButton = document.querySelector("#themeToggleButton");
 const themeColorMeta = document.querySelector('meta[name="theme-color"]');
 const taskDetailPanel = document.querySelector("#taskDetailPanel");
+const taskDetailOverlay = document.querySelector("#taskDetailOverlay");
 const taskDetailEmpty = document.querySelector("#taskDetailEmpty");
 const taskDetailForm = document.querySelector("#taskDetailForm");
 const detailHeading = document.querySelector("#detailHeading");
@@ -87,6 +105,7 @@ const detailDetailsInput = document.querySelector("#detailDetailsInput");
 const detailLaneInput = document.querySelector("#detailLaneInput");
 const detailPriorityInput = document.querySelector("#detailPriorityInput");
 const detailDueDateInput = document.querySelector("#detailDueDateInput");
+const detailDailyInput = document.querySelector("#detailDailyInput");
 const detailSubtaskList = document.querySelector("#detailSubtaskList");
 const detailSubtaskMeta = document.querySelector("#detailSubtaskMeta");
 const detailSubtaskInput = document.querySelector("#detailSubtaskInput");
@@ -123,6 +142,8 @@ const laneCountTargets = {
 
 let deferredPrompt = null;
 let syncIntervalId = 0;
+let liveSyncUnsubscribe = null;
+let liveSyncGeneration = 0;
 let dragTodoId = "";
 let dragCardPosition = "after";
 let statusTimerId = 0;
@@ -137,6 +158,7 @@ const state = {
   activeComposerTab: "task",
   selectedDate: loadUiState().selectedDate,
   filterMode: loadUiState().filterMode,
+  activeView: loadUiState().activeView,
   mobileView: loadUiState().mobileView,
   sortMode: loadUiState().sortMode,
   theme: loadUiState().theme,
@@ -165,6 +187,7 @@ registerServiceWorker();
 function loadUiState() {
   const defaults = {
     selectedDate: todayIso(),
+    activeView: "board",
     filterMode: "all",
     mobileView: "today",
     sortMode: "manual",
@@ -175,6 +198,7 @@ function loadUiState() {
     return {
       ...defaults,
       ...(parsed || {}),
+      activeView: parsed && parsed.activeView === "calendar" ? "calendar" : "board",
       selectedDate: normalizeIsoDateInput(parsed && parsed.selectedDate) || defaults.selectedDate,
     };
   } catch {
@@ -187,6 +211,7 @@ function saveUiState() {
     UI_KEY,
     JSON.stringify({
       selectedDate: state.selectedDate,
+      activeView: state.activeView,
       filterMode: state.filterMode,
       mobileView: state.mobileView,
       sortMode: state.sortMode,
@@ -212,20 +237,34 @@ function bindEvents() {
   document.querySelector("#showRegisterButton").addEventListener("click", () => setAuthMode("register"));
   document.querySelector("#closeComposerButton").addEventListener("click", closeComposer);
 
+  boardViewButton.addEventListener("click", () => setActiveView("board"));
+  calendarViewButton.addEventListener("click", () => setActiveView("calendar"));
+  calendarMonthSelect.addEventListener("change", () => {
+    const current = new Date(`${state.selectedDate}T00:00:00`);
+    const next = new Date(current.getFullYear(), Number(calendarMonthSelect.value), 1);
+    state.selectedDate = dateToLocalIso(next);
+    saveUiState();
+    render();
+  });
+  calendarPrevYearButton.addEventListener("click", () => shiftCalendarYear(-1));
+  calendarNextYearButton.addEventListener("click", () => shiftCalendarYear(1));
+
   document.querySelector("#tabTaskButton").addEventListener("click", () => setComposerTab("task"));
   document.querySelector("#tabNoteButton").addEventListener("click", () => setComposerTab("note"));
   document.querySelector("#tabPlanButton").addEventListener("click", () => setComposerTab("plan"));
 
   document.querySelector("#openComposerButton").addEventListener("click", () => openComposer("task"));
   todoLaneInput.addEventListener("change", syncTaskDateByLane);
-  quickAddForm.addEventListener("submit", handleQuickAdd);
+  quickAddForm?.addEventListener("submit", handleQuickAdd);
 
   Object.entries(filterButtons).forEach(([mode, button]) => {
     button.addEventListener("click", () => {
       state.filterMode = mode;
+      state.mobileView = mode === "today" ? "today" : "filtered";
       saveUiState();
       renderBoard();
       renderSidebar();
+      renderMobileView();
     });
   });
 
@@ -251,6 +290,11 @@ function bindEvents() {
   });
 
   closeTaskDetailButton.addEventListener("click", closeTaskDetail);
+  taskDetailOverlay.addEventListener("click", (event) => {
+    if (event.target === taskDetailOverlay) {
+      closeTaskDetail();
+    }
+  });
   closeTaskActionButton.addEventListener("click", closeTaskActionSheet);
   taskActionEditButton.addEventListener("click", () => {
     const todoId = state.taskActionTaskId;
@@ -395,17 +439,22 @@ function bindEvents() {
     try {
       const editingId = taskEditorId.value;
       setStatus(editingId ? "Updating task..." : "Adding task...");
-      const requestedLane = String(formData.get("lane") || "ideas");
+      const isDaily = formData.get("daily") === "on";
+      const dueDate = normalizeIsoDateInput(String(formData.get("dueDate") || "").trim()) || null;
+      const requestedLane = inferStartingLane(String(formData.get("lane") || ""), dueDate, isDaily);
       const payload = await api(editingId ? `/todos/${editingId}` : "/todos", {
         method: editingId ? "PUT" : "POST",
         body: {
           title: String(formData.get("title") || "").trim(),
           details: String(formData.get("details") || "").trim(),
           subtasks: currentTaskSubtasks(editingId),
-          dueDate: normalizeIsoDateInput(String(formData.get("dueDate") || "").trim()) || null,
+          dueDate,
           lane: requestedLane,
           priority: String(formData.get("priority") || "medium"),
           done: editingId ? currentTaskDone(editingId) : false,
+          daily: isDaily,
+          dailyCompletedOn: editingId ? currentTaskDailyMeta(editingId).dailyCompletedOn : null,
+          streak: editingId ? currentTaskDailyMeta(editingId).streak : 0,
         },
       });
       const hydrated = hydrateTodoFromServer(payload.todo);
@@ -422,9 +471,10 @@ function bindEvents() {
       form.reset();
       taskEditorId.value = "";
       taskSubmitButton.textContent = "Add Task";
-      todoLaneInput.value = "ideas";
+      todoLaneInput.value = "";
       todoPriorityInput.value = "medium";
       todoDueDateInput.value = "";
+      todoDailyInput.checked = false;
       closeComposer();
       render();
       setStatus(editingId ? "Task updated." : "Task added.");
@@ -595,6 +645,14 @@ function bindEvents() {
   detailDueDateInput.addEventListener("change", () => {
     updateDetailDraft({ dueDate: normalizeIsoDateInput(detailDueDateInput.value) || null });
   });
+  detailDailyInput.addEventListener("change", () => {
+    const patch = { daily: detailDailyInput.checked };
+    if (detailDailyInput.checked) {
+      patch.lane = "today";
+      detailLaneInput.value = "today";
+    }
+    updateDetailDraft(patch);
+  });
   addDetailSubtaskButton.addEventListener("click", addDetailSubtask);
   toggleCompletedSubtasksButton.addEventListener("click", () => {
     state.detailCompletedCollapsed = !state.detailCompletedCollapsed;
@@ -611,7 +669,7 @@ function bindEvents() {
     if (!todo) {
       return;
     }
-    await toggleTodoDone(todo.id, !todo.done);
+    await toggleTodoDone(todo.id, todo.daily ? true : !todo.done);
   });
   deleteTaskButton.addEventListener("click", async () => {
     const todo = currentDetailTodo();
@@ -644,9 +702,13 @@ function openComposer(tab) {
   setComposerTab(tab);
   syncDateInputs();
   if (tab === "task") {
-    todoDueDateInput.value = "";
-    todoLaneInput.value = "ideas";
-    syncTaskDateByLane();
+    const shouldPrefillCalendarDate = state.activeView === "calendar" && state.selectedDate;
+    todoDueDateInput.value = shouldPrefillCalendarDate ? state.selectedDate : "";
+    todoLaneInput.value = "";
+    todoDailyInput.checked = false;
+    if (!shouldPrefillCalendarDate) {
+      syncTaskDateByLane();
+    }
   }
   planDateInput.value = state.selectedDate;
   if (tab === "note") {
@@ -678,6 +740,11 @@ function setComposerTab(tab) {
   document.querySelector("#tabTaskButton").classList.toggle("is-active", tab === "task");
   document.querySelector("#tabNoteButton").classList.toggle("is-active", tab === "note");
   document.querySelector("#tabPlanButton").classList.toggle("is-active", tab === "plan");
+  const composerMoreDetails = document.querySelector("#composerMoreDetails");
+  if (composerMoreDetails) {
+    composerMoreDetails.classList.toggle("is-active", tab === "note" || tab === "plan");
+    composerMoreDetails.open = tab === "note" || tab === "plan";
+  }
   composerTitle.textContent = tab === "task" ? "Add Task" : tab === "note" ? "Daily Note" : "Daily Plan";
   composerHint.textContent = tab === "task"
     ? "Create a task and move it between lanes when needed."
@@ -779,6 +846,12 @@ function showApp() {
   appShell.classList.remove("app-hidden");
 }
 
+function setActiveView(view) {
+  state.activeView = view === "calendar" ? "calendar" : "board";
+  saveUiState();
+  render();
+}
+
 function applyBootstrap(payload) {
   state.user = payload.user || null;
   state.notesByDate = Object.fromEntries((payload.notes || []).map((note) => [note.noteDate, note.content]));
@@ -809,10 +882,12 @@ function render() {
   applyTheme();
   renderSidebar();
   renderBoard();
+  renderCalendar();
   renderTaskDetail();
   renderUndoToast();
   renderTaskActionSheet();
   renderMobileView();
+  renderViewMode();
   if (!composerOverlay.classList.contains("composer-overlay--hidden") && state.activeComposerTab === "plan") {
     renderPlans();
   }
@@ -827,14 +902,16 @@ function renderSidebar() {
   workspaceNameLabel.textContent = state.user ? `${displayName}'s workspace` : "Planboard";
   userNameLabel.textContent = state.user ? `${displayName} (${email})` : "-";
   avatarBadge.textContent = initialsForName(displayName);
-  selectedDateLabel.textContent = DAY_FORMATTER.format(new Date(`${state.selectedDate}T00:00:00`));
-  const plans = plansForDate(state.selectedDate);
-  const datedTasks = todosForDate(state.selectedDate);
-  selectedDateMeta.textContent = `${plans.length} plan${plans.length === 1 ? "" : "s"} / ${datedTasks.length} task${datedTasks.length === 1 ? "" : "s"}`;
+  const today = todayIso();
+  selectedDateLabel.textContent = DAY_FORMATTER.format(new Date(`${today}T00:00:00`));
+  const todayPlans = plansForDate(today);
+  const todayTasks = todosForDate(today);
+  const selectedPlans = plansForDate(state.selectedDate);
+  selectedDateMeta.textContent = `${todayPlans.length} plan${todayPlans.length === 1 ? "" : "s"} / ${todayTasks.length} task${todayTasks.length === 1 ? "" : "s"}`;
   allTaskCountBadge.textContent = String(state.todos.length);
-  openTaskCount.textContent = String(state.todos.filter((todo) => !todo.done).length);
+  openTaskCount.textContent = String(state.todos.filter((todo) => !todo.done && !isDailyCompletedToday(todo)).length);
   noteCount.textContent = state.notesByDate[state.selectedDate] ? "1" : "0";
-  planCount.textContent = String(plans.length);
+  planCount.textContent = String(selectedPlans.length);
   const completedCount = state.todos.filter((todo) => todo.done).length;
   completedMeta.textContent = `${completedCount} completed`;
   clearCompletedButton.hidden = completedCount === 0;
@@ -844,6 +921,8 @@ function renderTaskDetail() {
   const todo = currentDetailTodo();
   const isOpen = Boolean(todo);
   appShell.classList.toggle("window-shell--detail-open", isOpen);
+  taskDetailOverlay.classList.toggle("task-detail-overlay--hidden", !isOpen);
+  taskDetailOverlay.setAttribute("aria-hidden", String(!isOpen));
   taskDetailPanel.classList.toggle("task-detail--hidden", !isOpen);
   taskDetailPanel.setAttribute("aria-hidden", String(!isOpen));
   taskDetailEmpty.classList.toggle("task-detail__empty--hidden", isOpen);
@@ -855,8 +934,10 @@ function renderTaskDetail() {
     state.detailDirty = false;
     state.detailSaving = false;
     detailHeading.textContent = "Task details";
-    detailSaveState.textContent = "Pick a task to inspect and edit inline.";
+    detailSaveState.textContent = "Pick a task to inspect and edit.";
     detailTaskId.value = "";
+    detailLaneInput.disabled = false;
+    detailDailyInput.checked = false;
     detailSubtaskList.innerHTML = "";
     detailSubtaskMeta.textContent = "0 items";
     return;
@@ -870,8 +951,10 @@ function renderTaskDetail() {
   detailTitleInput.value = draft.title || "";
   detailDetailsInput.value = draft.details || "";
   detailLaneInput.value = normalizeLane(draft);
+  detailLaneInput.disabled = Boolean(draft.daily);
   detailPriorityInput.value = draft.priority || "medium";
   detailDueDateInput.value = draft.dueDate || "";
+  detailDailyInput.checked = Boolean(draft.daily);
   syncTaskDetailChrome(draft);
   renderDetailSubtasks(draft.subtasks || []);
 }
@@ -879,11 +962,11 @@ function renderTaskDetail() {
 function syncTaskDetailChrome(draft = state.detailDraft || currentDetailTodo()) {
   if (!draft) {
     detailHeading.textContent = "Task details";
-    detailSaveState.textContent = "Pick a task to inspect and edit inline.";
+    detailSaveState.textContent = "Pick a task to inspect and edit.";
     return;
   }
   detailHeading.textContent = draft.title || "Task details";
-  toggleTaskDoneButton.textContent = draft.done ? "Mark Active" : "Mark Done";
+  toggleTaskDoneButton.textContent = draft.daily ? "Complete Today" : draft.done ? "Mark Active" : "Mark Done";
   detailSaveState.textContent = state.detailSaving
     ? "Saving changes..."
     : state.detailDirty
@@ -982,7 +1065,7 @@ function renderTaskActionSheet() {
     button.type = "button";
     button.className = `task-action-move-list__button${groupingLane(todo) === lane ? " is-active" : ""}`;
     button.textContent = laneLabel(lane);
-    button.disabled = groupingLane(todo) === lane;
+    button.disabled = todo.daily || groupingLane(todo) === lane;
     button.addEventListener("click", async () => {
       closeTaskActionSheet();
       if (groupingLane(todo) !== lane || todo.done !== (lane === "done")) {
@@ -1000,12 +1083,21 @@ function renderMobileView() {
   });
 }
 
+function renderViewMode() {
+  const isCalendar = state.activeView === "calendar";
+  appShell.dataset.activeView = isCalendar ? "calendar" : "board";
+  boardViewButton.classList.toggle("is-active", !isCalendar);
+  calendarViewButton.classList.toggle("is-active", isCalendar);
+  boardView.classList.toggle("board-view--hidden", isCalendar);
+  calendarView.classList.toggle("board-view--hidden", !isCalendar);
+}
+
 function applyTheme() {
   const theme = state.theme === "light" ? "light" : "dark";
   document.documentElement.dataset.theme = theme;
   themeToggleButton.textContent = theme === "dark" ? "Light Mode" : "Dark Mode";
   if (themeColorMeta) {
-    themeColorMeta.setAttribute("content", theme === "dark" ? "#22262b" : "#f5f8fc");
+    themeColorMeta.setAttribute("content", theme === "dark" ? "#22262b" : "#f7f9fc");
   }
 }
 
@@ -1078,6 +1170,115 @@ function renderBoard() {
   renderFilterState(visibleTodos.length);
 }
 
+function renderCalendar() {
+  const selected = new Date(`${state.selectedDate}T00:00:00`);
+  const month = selected.getMonth();
+  const year = selected.getFullYear();
+  const deadlineMap = deadlineTodosByDate();
+
+  calendarMonthSelect.value = String(month);
+  calendarYearLabel.textContent = String(year);
+  calendarMonthHeading.textContent = new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    year: "numeric",
+  }).format(selected);
+
+  calendarGrid.innerHTML = "";
+  calendarMonthDates(year, month).forEach((date) => {
+    const iso = dateToLocalIso(date);
+    const todos = deadlineMap.get(iso) || [];
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "calendar-day";
+    button.classList.toggle("is-muted", date.getMonth() !== month);
+    button.classList.toggle("is-today", iso === todayIso());
+    button.classList.toggle("is-selected", iso === state.selectedDate);
+
+    const number = document.createElement("span");
+    number.className = "calendar-day__number";
+    number.textContent = String(date.getDate());
+    button.appendChild(number);
+
+    const count = document.createElement("span");
+    count.className = "calendar-day__count";
+    count.textContent = todos.length ? `${todos.length} task${todos.length === 1 ? "" : "s"}` : "";
+    button.appendChild(count);
+
+    if (todos.length) {
+      const priorityCounts = PLANBOARD_DOMAIN.calendarPriorityCounts
+        ? PLANBOARD_DOMAIN.calendarPriorityCounts(todos)
+        : todos.reduce((counts, todo) => {
+          const priority = ["high", "medium", "low"].includes(todo.priority) ? todo.priority : "medium";
+          counts[priority] += 1;
+          return counts;
+        }, { high: 0, medium: 0, low: 0 });
+      const prioritySummary = document.createElement("div");
+      prioritySummary.className = "calendar-day__priorities";
+      [
+        ["high", "H"],
+        ["medium", "M"],
+        ["low", "L"],
+      ].forEach(([priority, label]) => {
+        if (!priorityCounts[priority]) {
+          return;
+        }
+        const item = document.createElement("span");
+        item.className = `calendar-day__priority calendar-day__priority--${priority}`;
+        item.textContent = `${label} ${priorityCounts[priority]}`;
+        prioritySummary.appendChild(item);
+      });
+      button.appendChild(prioritySummary);
+    }
+
+    button.addEventListener("click", () => {
+      state.selectedDate = iso;
+      saveUiState();
+      render();
+    });
+    calendarGrid.appendChild(button);
+  });
+
+  renderCalendarTimeline(deadlineMap.get(state.selectedDate) || []);
+}
+
+function renderCalendarTimeline(todos) {
+  calendarSelectedDateLabel.textContent = DAY_FORMATTER.format(new Date(`${state.selectedDate}T00:00:00`));
+  calendarSelectedDateMeta.textContent = `${todos.length} deadline${todos.length === 1 ? "" : "s"}`;
+  calendarTimelineList.innerHTML = "";
+
+  if (!todos.length) {
+    const empty = document.createElement("div");
+    empty.className = "deadline-empty";
+    empty.textContent = "No dated deadlines for this day.";
+    calendarTimelineList.appendChild(empty);
+    return;
+  }
+
+  sortDeadlineTodos(todos).forEach((todo) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `deadline-item priority-${todo.priority || "medium"}`;
+    button.classList.toggle("is-done", Boolean(todo.done));
+
+    const priority = document.createElement("span");
+    priority.className = "deadline-item__priority";
+    priority.textContent = todo.priority || "medium";
+
+    const title = document.createElement("strong");
+    title.textContent = todo.title || "Untitled task";
+
+    const details = document.createElement("span");
+    details.className = "deadline-item__details";
+    details.textContent = todo.details || laneLabel(groupingLane(todo));
+
+    button.append(priority, title, details);
+    button.addEventListener("click", () => {
+      openTaskDetail(todo.id);
+    });
+    calendarTimelineList.appendChild(button);
+  });
+}
+
 function renderPlans() {
   const plans = plansForDate(state.selectedDate);
   planList.innerHTML = "";
@@ -1124,6 +1325,7 @@ function renderTodoCard(todo) {
   const due = fragment.querySelector(".task-card__due");
   const priority = fragment.querySelector(".task-card__priority");
   const subtaskMeta = fragment.querySelector(".task-card__subtasks");
+  const streak = fragment.querySelector(".task-card__streak");
   let longPressTimerId = 0;
   let longPressTriggered = false;
   let longPressStart = null;
@@ -1132,15 +1334,17 @@ function renderTodoCard(todo) {
   card.dataset.lane = normalizeLane(todo);
   card.classList.toggle("is-selected", todo.id === state.detailTaskId);
   card.classList.toggle("is-done", todo.done);
+  card.classList.toggle("is-daily", Boolean(todo.daily));
   card.classList.toggle("is-draggable", canDragTodo(todo));
   card.draggable = canDragTodo(todo);
-  checkbox.checked = todo.done;
+  checkbox.checked = todo.daily ? false : todo.done;
   title.textContent = todo.title;
   details.textContent = todo.details || "";
-  due.textContent = todo.dueDate ? SHORT_DATE_FORMATTER.format(new Date(`${todo.dueDate}T00:00:00`)) : "";
+  due.textContent = todo.daily ? "Daily" : todo.dueDate ? SHORT_DATE_FORMATTER.format(new Date(`${todo.dueDate}T00:00:00`)) : "";
   const subtaskCount = (todo.subtasks || []).length;
   const doneSubtasks = (todo.subtasks || []).filter((item) => item.done).length;
   subtaskMeta.textContent = subtaskCount ? `${doneSubtasks}/${subtaskCount} steps` : "";
+  streak.textContent = todo.daily ? `Streak ${Number(todo.streak || 0)}` : "";
   priority.textContent = todo.priority || "";
   priority.className = "task-card__priority";
   if (todo.priority) {
@@ -1213,7 +1417,7 @@ function renderTodoCard(todo) {
   });
 
   checkbox.addEventListener("change", async () => {
-    const success = await toggleTodoDone(todo.id, checkbox.checked);
+    const success = await toggleTodoDone(todo.id, todo.daily ? true : checkbox.checked);
     if (!success) {
       checkbox.checked = !checkbox.checked;
     }
@@ -1417,6 +1621,9 @@ function nextLocalSortOrder(lane, excludeId = "") {
 function filteredTodos() {
   const today = todayIso();
   return state.todos.filter((todo) => {
+    if (isDailyCompletedToday(todo)) {
+      return false;
+    }
     if (state.filterMode === "today") {
       return !todo.done && (groupingLane(todo) === "today" || todo.dueDate === today);
     }
@@ -1445,6 +1652,9 @@ function sortTodos(todos) {
 }
 
 function groupingLane(todo) {
+  if (todo.daily) {
+    return "today";
+  }
   if (todo.done) {
     return "done";
   }
@@ -1452,6 +1662,9 @@ function groupingLane(todo) {
 }
 
 function normalizeLane(todo) {
+  if (todo.daily) {
+    return "today";
+  }
   if (LANES.includes(todo.lane)) {
     return todo.lane === "done" ? "today" : todo.lane;
   }
@@ -1475,6 +1688,9 @@ function hydrateTodoFromServer(todo) {
       : [],
     lane: todo.lane && LANES.includes(todo.lane) ? todo.lane : parsed.lane || inferLegacyLane(todo),
     sortOrder: Number.isFinite(Number(todo.sortOrder)) ? Number(todo.sortOrder) : 0,
+    daily: Boolean(todo.daily),
+    dailyCompletedOn: todo.dailyCompletedOn || null,
+    streak: Number.isFinite(Number(todo.streak)) ? Number(todo.streak) : 0,
   };
 }
 
@@ -1502,7 +1718,10 @@ function serializeTodoForApi(todo) {
     lane: normalizeLane(todo),
     sortOrder: Number.isFinite(Number(todo.sortOrder)) ? Number(todo.sortOrder) : 0,
     priority: todo.priority || "medium",
-    done: Boolean(todo.done),
+    done: Boolean(todo.daily) ? false : Boolean(todo.done),
+    daily: Boolean(todo.daily),
+    dailyCompletedOn: todo.dailyCompletedOn || null,
+    streak: Number.isFinite(Number(todo.streak)) ? Number(todo.streak) : 0,
   };
 }
 
@@ -1541,8 +1760,54 @@ function plansForDate(iso) {
     .sort((left, right) => (left.timeLabel || "99:99").localeCompare(right.timeLabel || "99:99"));
 }
 
+function deadlineTodosByDate() {
+  if (PLANBOARD_DOMAIN.deadlineTodosByDate) {
+    return PLANBOARD_DOMAIN.deadlineTodosByDate(state.todos);
+  }
+  const map = new Map();
+  state.todos
+    .filter((todo) => todo.dueDate && !todo.daily)
+    .forEach((todo) => {
+      const list = map.get(todo.dueDate) || [];
+      list.push(todo);
+      map.set(todo.dueDate, list);
+    });
+  return map;
+}
+
+function sortDeadlineTodos(todos) {
+  return [...todos].sort((left, right) =>
+    comparePriority(left, right) ||
+    String(left.title || "").localeCompare(String(right.title || ""))
+  );
+}
+
+function calendarMonthDates(year, month) {
+  const first = new Date(year, month, 1);
+  const start = weekStart(first);
+  const dates = [];
+  for (let index = 0; index < 42; index += 1) {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    dates.push(date);
+  }
+  return dates;
+}
+
+function shiftCalendarYear(direction) {
+  const current = new Date(`${state.selectedDate}T00:00:00`);
+  current.setFullYear(current.getFullYear() + direction);
+  current.setDate(1);
+  state.selectedDate = dateToLocalIso(current);
+  saveUiState();
+  render();
+}
+
 function todosForDate(iso) {
   return state.todos.filter((todo) => {
+    if (isDailyCompletedToday(todo)) {
+      return false;
+    }
     if (todo.dueDate === iso) {
       return true;
     }
@@ -1558,6 +1823,14 @@ function currentTaskDone(id) {
   return Boolean(state.todos.find((todo) => todo.id === id)?.done);
 }
 
+function currentTaskDailyMeta(id) {
+  const todo = state.todos.find((entry) => entry.id === id);
+  return {
+    dailyCompletedOn: todo?.dailyCompletedOn || null,
+    streak: Number(todo?.streak || 0),
+  };
+}
+
 function currentTaskSubtasks(id) {
   if (!id) {
     return [];
@@ -1570,6 +1843,10 @@ function currentDetailTodo() {
 }
 
 function openTaskDetail(todoId, options = {}) {
+  if (!options.focusTitle && state.detailTaskId === todoId) {
+    closeTaskDetail();
+    return;
+  }
   const todo = state.todos.find((entry) => entry.id === todoId);
   if (!todo) {
     return;
@@ -1746,6 +2023,9 @@ function addDetailSubtask() {
 
 async function handleQuickAdd(event) {
   event.preventDefault();
+  if (!quickAddInput || !quickAddLaneInput) {
+    return;
+  }
   const title = quickAddInput.value.trim();
   if (title.length < 2) {
     setStatus("Task title is too short.", true);
@@ -1854,7 +2134,7 @@ async function toggleTodoDone(todoId, nextDone) {
     return false;
   }
   const previous = cloneTodoDraft(todo);
-  const optimistic = { ...todo, done: nextDone };
+  const optimistic = todo.daily && nextDone ? completeDailyTodo(todo) : { ...todo, done: nextDone };
   updateTodo(optimistic);
   if (state.detailTaskId === todo.id) {
     state.detailDraft = cloneTodoDraft(optimistic);
@@ -1869,7 +2149,9 @@ async function toggleTodoDone(todoId, nextDone) {
     });
     const hydrated = hydrateTodoFromServer(payload.todo);
     updateTodo(hydrated);
-    if (state.detailTaskId === todo.id) {
+    if (hydrated.daily && isDailyCompletedToday(hydrated) && state.detailTaskId === todo.id) {
+      closeTaskDetail();
+    } else if (state.detailTaskId === todo.id) {
       state.detailDraft = cloneTodoDraft(hydrated);
     }
     state.lastSyncedAt = Date.now();
@@ -1943,6 +2225,7 @@ function openTaskEditor(todo) {
   todoLaneInput.value = normalizeLane(todo);
   todoPriorityInput.value = todo.priority || "medium";
   todoDueDateInput.value = todo.dueDate || "";
+  todoDailyInput.checked = Boolean(todo.daily);
   taskSubmitButton.textContent = "Save Task";
   composerOverlay.classList.remove("composer-overlay--hidden");
   focusComposerField("task");
@@ -1956,6 +2239,13 @@ function syncTaskDateByLane() {
   if (lane === "today" && !todoDueDateInput.value) {
     todoDueDateInput.value = state.selectedDate;
   }
+}
+
+function inferStartingLane(requestedLane, dueDate, isDaily = false) {
+  if (PLANBOARD_DOMAIN.inferStartingLane) {
+    return PLANBOARD_DOMAIN.inferStartingLane(requestedLane, dueDate, isDaily, todayIso());
+  }
+  return isDaily ? "today" : requestedLane || (dueDate ? "month" : "ideas");
 }
 
 function syncComposerNote() {
@@ -2041,6 +2331,31 @@ async function refreshFromServer(silent) {
 
 function startAutoSync() {
   stopAutoSync();
+  if (USE_FIREBASE && FIREBASE_ADAPTER && FIREBASE_ADAPTER.subscribeBootstrap) {
+    const generation = ++liveSyncGeneration;
+    FIREBASE_ADAPTER.subscribeBootstrap(
+      (payload) => {
+        applyBootstrap(payload);
+        state.lastSyncedAt = Date.now();
+        render();
+      },
+      (error) => {
+        setStatus(error.message, true);
+      }
+    ).then((unsubscribe) => {
+      if (generation !== liveSyncGeneration) {
+        unsubscribe();
+        return;
+      }
+      liveSyncUnsubscribe = unsubscribe;
+    }).catch((error) => {
+      setStatus(error.message, true);
+    });
+    syncLabelTimerId = window.setInterval(() => {
+      renderSyncMeta();
+    }, 30000);
+    return;
+  }
   syncIntervalId = window.setInterval(() => {
     refreshFromServer(true);
   }, AUTO_SYNC_MS);
@@ -2050,6 +2365,11 @@ function startAutoSync() {
 }
 
 function stopAutoSync() {
+  liveSyncGeneration += 1;
+  if (liveSyncUnsubscribe) {
+    liveSyncUnsubscribe();
+    liveSyncUnsubscribe = null;
+  }
   if (syncIntervalId) {
     window.clearInterval(syncIntervalId);
     syncIntervalId = 0;
@@ -2085,51 +2405,12 @@ function setStatus(message, isError = false) {
 }
 
 async function api(path, options = {}) {
-  if (USE_FIREBASE) {
-    if (!FIREBASE_ADAPTER || !FIREBASE_ADAPTER.isEnabled()) {
-      const error = new Error("Firebase adapter failed to load.");
-      error.status = 500;
-      throw error;
-    }
-    return FIREBASE_ADAPTER.api(path, options);
-  }
-
-  const headers = {
-    Accept: "application/json",
-    ...(options.body ? { "Content-Type": "application/json" } : {}),
-    ...(options.headers || {}),
-  };
-
-  const token = options.tokenOverride || state.token;
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  let response;
-  try {
-    response = await fetch(`${API_BASE}${path}`, {
-      method: options.method || "GET",
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    });
-  } catch {
-    const error = new Error("Cannot reach the server.");
-    error.status = 0;
+  if (!API_CLIENT) {
+    const error = new Error("API client failed to load.");
+    error.status = 500;
     throw error;
   }
-
-  let payload = {};
-  const contentType = response.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) {
-    payload = await response.json();
-  }
-
-  if (!response.ok) {
-    const error = new Error(payload.error || `Request failed (${response.status}).`);
-    error.status = response.status;
-    throw error;
-  }
-  return payload;
+  return API_CLIENT.request(path, { ...options, token: state.token });
 }
 
 function summarize(text, limit) {
@@ -2157,7 +2438,42 @@ function relativeTime(timestamp) {
 }
 
 function todayIso() {
-  return dateToLocalIso(new Date());
+  return vietnamTodayIso();
+}
+
+function vietnamTodayIso() {
+  return PLANBOARD_DOMAIN.vietnamTodayIso
+    ? PLANBOARD_DOMAIN.vietnamTodayIso()
+    : new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function previousIsoDate(iso) {
+  return PLANBOARD_DOMAIN.previousIsoDate
+    ? PLANBOARD_DOMAIN.previousIsoDate(iso)
+    : (() => {
+      const date = new Date(`${iso}T00:00:00Z`);
+      date.setUTCDate(date.getUTCDate() - 1);
+      return date.toISOString().slice(0, 10);
+    })();
+}
+
+function isDailyCompletedToday(todo) {
+  return PLANBOARD_DOMAIN.isDailyCompletedToday
+    ? PLANBOARD_DOMAIN.isDailyCompletedToday(todo)
+    : Boolean(todo && todo.daily && todo.dailyCompletedOn === vietnamTodayIso());
+}
+
+function completeDailyTodo(todo) {
+  return PLANBOARD_DOMAIN.completeDailyTodo
+    ? PLANBOARD_DOMAIN.completeDailyTodo(todo)
+    : {
+      ...todo,
+      done: false,
+      lane: "today",
+      daily: true,
+      dailyCompletedOn: vietnamTodayIso(),
+      streak: todo.dailyCompletedOn === previousIsoDate(vietnamTodayIso()) ? Number(todo.streak || 0) + 1 : 1,
+    };
 }
 
 function normalizeIsoDateInput(value) {
@@ -2241,7 +2557,7 @@ function compareCreatedDesc(left, right) {
 }
 
 function canDragTodo(todo) {
-  return Boolean(todo && todo.id);
+  return Boolean(todo && todo.id && !todo.daily);
 }
 
 function canManualReorder() {

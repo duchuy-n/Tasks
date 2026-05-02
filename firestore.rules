@@ -9,19 +9,100 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isDate(value) {
+      return value is string && value.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function isOptionalDate(value) {
+      return value == null || isDate(value);
+    }
+
+    function isTime(value) {
+      return value is string && (value == '' || value.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$'));
+    }
+
+    function isTimestampText(value) {
+      return value is string && value.size() >= 10 && value.size() <= 40;
+    }
+
+    function validUserProfile() {
+      return request.resource.data.keys().hasOnly(['email', 'name', 'createdAt', 'updatedAt'])
+        && request.resource.data.keys().hasAll(['email', 'name', 'updatedAt'])
+        && request.resource.data.email is string
+        && request.resource.data.email.size() <= 254
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.name.size() <= 80
+        && isTimestampText(request.resource.data.updatedAt)
+        && (!('createdAt' in request.resource.data) || isTimestampText(request.resource.data.createdAt));
+    }
+
+    function validNote(noteId) {
+      return request.resource.data.keys().hasOnly(['noteDate', 'content', 'updatedAt'])
+        && request.resource.data.noteDate == noteId
+        && isDate(request.resource.data.noteDate)
+        && request.resource.data.content is string
+        && request.resource.data.content.size() <= 10000
+        && isTimestampText(request.resource.data.updatedAt);
+    }
+
+    function validPlan(planId) {
+      return request.resource.data.keys().hasOnly(['id', 'planDate', 'timeLabel', 'title', 'details', 'createdAt', 'updatedAt'])
+        && request.resource.data.id == planId
+        && isDate(request.resource.data.planDate)
+        && isTime(request.resource.data.timeLabel)
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 2
+        && request.resource.data.title.size() <= 160
+        && request.resource.data.details is string
+        && request.resource.data.details.size() <= 5000
+        && isTimestampText(request.resource.data.createdAt)
+        && isTimestampText(request.resource.data.updatedAt);
+    }
+
+    function validTodo(todoId) {
+      return request.resource.data.keys().hasOnly(['id', 'title', 'details', 'subtasks', 'dueDate', 'lane', 'sortOrder', 'priority', 'done', 'daily', 'dailyCompletedOn', 'streak', 'createdAt', 'updatedAt'])
+        && request.resource.data.id == todoId
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 2
+        && request.resource.data.title.size() <= 160
+        && request.resource.data.details is string
+        && request.resource.data.details.size() <= 5000
+        && request.resource.data.subtasks is list
+        && request.resource.data.subtasks.size() <= 32
+        && isOptionalDate(request.resource.data.dueDate)
+        && request.resource.data.lane in ['ideas', 'month', 'week', 'today', 'done']
+        && request.resource.data.sortOrder is number
+        && request.resource.data.sortOrder >= -1000000000
+        && request.resource.data.sortOrder <= 1000000000
+        && request.resource.data.priority in ['low', 'medium', 'high']
+        && request.resource.data.done is bool
+        && request.resource.data.daily is bool
+        && isOptionalDate(request.resource.data.dailyCompletedOn)
+        && request.resource.data.streak is int
+        && request.resource.data.streak >= 0
+        && request.resource.data.streak <= 100000
+        && isTimestampText(request.resource.data.createdAt)
+        && isTimestampText(request.resource.data.updatedAt);
+    }
+
     match /users/{userId} {
-      allow read, write: if isOwner(userId);
+      allow read, delete: if isOwner(userId);
+      allow create, update: if isOwner(userId) && validUserProfile();
 
       match /notes/{noteId} {
-        allow read, write: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validNote(noteId);
       }
 
       match /plans/{planId} {
-        allow read, write: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validPlan(planId);
       }
 
       match /todos/{todoId} {
-        allow read, write: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validTodo(todoId);
       }
     }
   }
