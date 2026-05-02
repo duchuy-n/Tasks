@@ -2569,7 +2569,7 @@ function canDragTodo(todo) {
 }
 
 function canManualReorder() {
-  return state.sortMode === "manual" && state.filterMode === "all";
+  return state.sortMode === "manual";
 }
 
 function initialsForName(name) {
