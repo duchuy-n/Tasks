@@ -8,6 +8,7 @@ const files = [
   "index.html",
   "styles.css",
   "planboard-domain.js",
+  "portfolio-utils.js",
   "planboard-api-client.js",
   "app.js",
   "firebase-adapter.js",

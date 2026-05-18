@@ -204,6 +204,10 @@ button {
   margin: 22px 0 18px;
 }
 
+.composer-overlay[data-locked="true"] .composer-tabs {
+  display: none;
+}
+
 .auth-form,
 .composer-form {
   display: grid;
@@ -282,7 +286,8 @@ textarea {
 .clear-link,
 .tool-icon,
 .task-card__delete,
-.plan-item__delete {
+.plan-item__delete,
+.portfolio-card__view {
   transition: background 140ms ease, color 140ms ease, transform 140ms ease, opacity 140ms ease;
 }
 
@@ -292,7 +297,8 @@ textarea {
 .clear-link:hover,
 .tool-icon:hover,
 .task-card__delete:hover,
-.plan-item__delete:hover {
+.plan-item__delete:hover,
+.portfolio-card__view:hover {
   transform: translateY(-1px);
 }
 
@@ -359,6 +365,38 @@ textarea {
 .composer-more__body .chip {
   width: 100%;
   justify-content: center;
+}
+
+.composer-details {
+  display: grid;
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.composer-details > summary {
+  width: fit-content;
+  min-height: 32px;
+  padding: 7px 12px;
+  border: 1px solid var(--ghost-border);
+  border-radius: 999px;
+  background: var(--ghost-bg);
+  color: var(--board-text);
+  cursor: pointer;
+  font-size: 0.82rem;
+  list-style: none;
+}
+
+.composer-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.composer-details > summary:hover {
+  background: var(--ghost-bg-hover);
+}
+
+.composer-details__body {
+  display: grid;
+  gap: 14px;
 }
 
 .message {
@@ -980,6 +1018,209 @@ textarea {
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
+}
+
+.portfolio-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.portfolio-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 118px minmax(160px, 240px);
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.portfolio-toolbar__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.portfolio-search,
+.portfolio-year-filter {
+  min-height: 34px;
+}
+
+.portfolio-search {
+  width: 100%;
+  min-width: 0;
+}
+
+.portfolio-year-filter {
+  width: 100%;
+  padding-block: 7px;
+}
+
+.portfolio-layout {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  gap: 12px;
+  min-height: 0;
+}
+
+.portfolio-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 14px;
+  border: 1px solid var(--toolbar-border);
+  border-radius: 12px;
+  background: var(--panel-bg);
+}
+
+.portfolio-section.is-drop-target {
+  border-color: rgba(33, 144, 255, 0.42);
+  background: var(--accent-soft);
+}
+
+.portfolio-section__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.portfolio-section__header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.portfolio-list {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.portfolio-empty {
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--card-empty-bg);
+  color: var(--card-dim);
+  font-size: 0.84rem;
+}
+
+.portfolio-card {
+  display: grid;
+  gap: 8px;
+  padding: 13px;
+  border: 1px solid var(--card-line);
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+
+.portfolio-card:hover {
+  background: var(--card-bg-hover);
+}
+
+.portfolio-card.is-dragging {
+  opacity: 0.58;
+}
+
+.portfolio-card__top,
+.portfolio-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.portfolio-card__top {
+  justify-content: space-between;
+}
+
+.portfolio-card__type {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.67rem;
+  text-transform: uppercase;
+  font-weight: 800;
+}
+
+.portfolio-card--competition .portfolio-card__type {
+  background: rgba(243, 191, 74, 0.14);
+  color: var(--yellow);
+}
+
+.portfolio-card__dates,
+.portfolio-card__meta {
+  color: var(--board-muted);
+  font-size: 0.8rem;
+}
+
+.portfolio-card__title {
+  margin: 0;
+  color: var(--board-text-strong);
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.portfolio-card__meta,
+.portfolio-card__achievement {
+  margin: 0;
+}
+
+.portfolio-card__achievement {
+  color: var(--green);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.portfolio-card__view {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--ghost-border);
+  border-radius: 9px;
+  background: var(--ghost-bg);
+  color: var(--board-text);
+  font-size: 0.76rem;
+  text-decoration: none;
+}
+
+.portfolio-card__view:hover {
+  background: var(--ghost-bg-hover);
+}
+
+.portfolio-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.portfolio-detail-grid div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.portfolio-detail-grid span {
+  color: var(--board-muted);
+  font-size: 0.74rem;
+}
+
+.portfolio-detail-grid strong {
+  color: var(--board-text);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.portfolio-detail-text {
+  margin: 0;
+  color: var(--board-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 .deadline-timeline,
@@ -1847,6 +2088,14 @@ textarea {
     overflow: auto;
   }
 
+  .portfolio-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .portfolio-toolbar {
+    grid-template-columns: minmax(0, 1fr) 118px minmax(150px, 220px);
+  }
+
   .deadline-timeline {
     max-height: 280px;
   }
@@ -2043,11 +2292,42 @@ textarea {
     overflow: visible;
   }
 
+  .portfolio-page {
+    overflow: visible;
+  }
+
+  .portfolio-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .portfolio-toolbar__chips {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+
+  .portfolio-toolbar__chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  .portfolio-section {
+    padding: 12px;
+  }
+
+  .portfolio-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
   .window-shell[data-active-view="calendar"] {
     padding-bottom: calc(18px + env(safe-area-inset-bottom));
   }
 
-  .window-shell[data-active-view="calendar"] .mobile-tabbar {
+  .window-shell[data-active-view="portfolio"] {
+    padding-bottom: calc(18px + env(safe-area-inset-bottom));
+  }
+
+  .window-shell[data-active-view="calendar"] .mobile-tabbar,
+  .window-shell[data-active-view="portfolio"] .mobile-tabbar {
     display: none;
   }
 

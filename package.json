@@ -7,7 +7,7 @@
   "scripts": {
     "prepare:web": "node scripts/prepare-web.js && node write-native-config.js",
     "start": "python server.py",
-    "check": "python -c \"import ast,pathlib; ast.parse(pathlib.Path('server.py').read_text(encoding='utf-8'), 'server.py')\" && node --check planboard-domain.js && node --check planboard-api-client.js && node --check app.js && node --check firebase-adapter.js && node --check sw.js && node --check scripts/prepare-web.js && node --check write-native-config.js && node --check electron/main.js && node --check electron/preload.js",
+    "check": "python -c \"import ast,pathlib; ast.parse(pathlib.Path('server.py').read_text(encoding='utf-8'), 'server.py')\" && node --check planboard-domain.js && node --check portfolio-utils.js && node --check planboard-api-client.js && node --check app.js && node --check firebase-adapter.js && node --check sw.js && node --check scripts/prepare-web.js && node --check write-native-config.js && node --check electron/main.js && node --check electron/preload.js",
     "test": "python -m unittest discover -s tests && npm run test:js",
     "test:js": "node tests/domain.test.js",
     "desktop:dev": "npm run prepare:web && electron electron/main.js",

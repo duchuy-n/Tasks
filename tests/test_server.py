@@ -149,6 +149,81 @@ class PlanboardServerTest(unittest.TestCase):
         self.assertEqual(payload["todo"]["lane"], "today")
         self.assertEqual(payload["todo"]["dailyCompletedOn"], "2026-05-01")
         self.assertEqual(payload["todo"]["streak"], 3)
+        todo_id = payload["todo"]["id"]
+
+        status, _, payload = self.request("PUT", f"/api/todos/{todo_id}/lane/done", token=token)
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+        self.assertEqual(payload["error"], "Daily tasks cannot be moved by lane.")
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos/reorder",
+            {"updates": [{"id": todo_id, "lane": "today", "sortOrder": 1024, "done": False}]},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+        self.assertEqual(payload["error"], "Daily tasks cannot be reordered.")
+
+    def test_portfolio_flow(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Portfolio User", "email": "portfolio@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/portfolio",
+            {
+                "type": "competition",
+                "title": "AI Challenge",
+                "organization": "City Lab",
+                "role": "Team lead",
+                "teammates": "An, Binh",
+                "startDate": "2026-05-01",
+                "endDate": "2026-05-20",
+                "status": "completed",
+                "achievement": "First prize",
+                "links": "https://example.com",
+                "notes": "Built the prototype and pitch deck.",
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        item_id = payload["portfolioItem"]["id"]
+        self.assertEqual(payload["portfolioItem"]["achievement"], "First prize")
+
+        status, _, payload = self.request("GET", "/api/bootstrap", token=token)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(len(payload["portfolioItems"]), 1)
+        self.assertEqual(payload["portfolioItems"][0]["id"], item_id)
+
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/portfolio/{item_id}",
+            {
+                "type": "competition",
+                "title": "AI Challenge",
+                "organization": "City Lab",
+                "role": "Presenter",
+                "teammates": "An, Binh",
+                "startDate": "2026-05-01",
+                "endDate": "2026-05-20",
+                "status": "completed",
+                "achievement": "First prize",
+                "links": "https://example.com",
+                "notes": "Final presentation owner.",
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["portfolioItem"]["role"], "Presenter")
+
+        status, _, payload = self.request("DELETE", f"/api/portfolio/{item_id}", token=token)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertTrue(payload["ok"])
 
     def test_static_server_does_not_expose_project_files(self) -> None:
         status, _, _ = self.request("GET", "/package.json")

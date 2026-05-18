@@ -32,6 +32,7 @@ PUBLIC_FILES = {
     "index.html",
     "styles.css",
     "planboard-domain.js",
+    "portfolio-utils.js",
     "planboard-api-client.js",
     "app.js",
     "firebase-adapter.js",
@@ -114,6 +115,25 @@ def init_db() -> None:
                 daily INTEGER NOT NULL DEFAULT 0,
                 daily_completed_on TEXT,
                 streak INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS portfolio_items (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                organization TEXT NOT NULL,
+                role TEXT NOT NULL,
+                teammates TEXT NOT NULL,
+                start_date TEXT,
+                end_date TEXT,
+                status TEXT NOT NULL,
+                achievement TEXT NOT NULL,
+                links TEXT NOT NULL,
+                notes TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -221,6 +241,25 @@ def serialize_todo(row: sqlite3.Row) -> dict:
     }
 
 
+def serialize_portfolio_item(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "type": row["type"],
+        "title": row["title"],
+        "organization": row["organization"],
+        "role": row["role"],
+        "teammates": row["teammates"],
+        "startDate": row["start_date"],
+        "endDate": row["end_date"],
+        "status": row["status"],
+        "achievement": row["achievement"],
+        "links": row["links"],
+        "notes": row["notes"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
 def email_normalize(email: str) -> str:
     return email.strip().lower()
 
@@ -280,6 +319,69 @@ def normalize_sort_order(value: object, fallback: float) -> float:
     return parsed
 
 
+def normalize_optional_date(value: object) -> str | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    if not is_valid_date(normalized):
+        raise ValueError("Date is invalid.")
+    return normalized
+
+
+def normalize_portfolio_payload(payload: dict, existing_created_at: str | None = None) -> dict:
+    item_type = str(payload.get("type", "project")).strip().lower() or "project"
+    title = str(payload.get("title", "")).strip()
+    organization = str(payload.get("organization", "")).strip()
+    role = str(payload.get("role", "")).strip()
+    teammates = str(payload.get("teammates", "")).strip()
+    status = str(payload.get("status", "active")).strip().lower() or "active"
+    achievement = str(payload.get("achievement", "")).strip()
+    links = str(payload.get("links", "")).strip()
+    notes = str(payload.get("notes", "")).strip()
+    start_date = normalize_optional_date(payload.get("startDate"))
+    end_date = normalize_optional_date(payload.get("endDate"))
+
+    if item_type not in {"project", "competition"}:
+        raise ValueError("Portfolio type is invalid.")
+    if status not in {"planned", "active", "completed"}:
+        raise ValueError("Portfolio status is invalid.")
+    if len(title) < 2:
+        raise ValueError("Portfolio title is too short.")
+    if len(title) > MAX_TITLE_LENGTH:
+        raise ValueError("Portfolio title is too long.")
+    if len(organization) > MAX_TITLE_LENGTH:
+        raise ValueError("Organization is too long.")
+    if len(role) > MAX_TITLE_LENGTH:
+        raise ValueError("Role is too long.")
+    if len(teammates) > 1000:
+        raise ValueError("Teammates field is too long.")
+    if len(achievement) > 1000:
+        raise ValueError("Achievement is too long.")
+    if len(links) > 2000:
+        raise ValueError("Links field is too long.")
+    if len(notes) > MAX_DETAILS_LENGTH:
+        raise ValueError("Portfolio notes are too long.")
+    if start_date and end_date and end_date < start_date:
+        raise ValueError("End date cannot be before start date.")
+
+    timestamp = now_iso()
+    return {
+        "type": item_type,
+        "title": title,
+        "organization": organization,
+        "role": role,
+        "teammates": teammates,
+        "start_date": start_date,
+        "end_date": end_date,
+        "status": status,
+        "achievement": achievement,
+        "links": links,
+        "notes": notes,
+        "created_at": existing_created_at or timestamp,
+        "updated_at": timestamp,
+    }
+
+
 def create_session(connection: sqlite3.Connection, user_id: str) -> str:
     token = secrets.token_urlsafe(32)
     created = now_iso()
@@ -319,11 +421,23 @@ def bootstrap_payload(connection: sqlite3.Connection, user_id: str, user_row: sq
         "SELECT * FROM todos WHERE user_id = ? ORDER BY lane, sort_order ASC, created_at DESC",
         (user_id,),
     ).fetchall()
+    portfolio_items = connection.execute(
+        """
+        SELECT * FROM portfolio_items
+        WHERE user_id = ?
+        ORDER BY
+            CASE status WHEN 'planned' THEN 0 WHEN 'active' THEN 1 ELSE 2 END,
+            COALESCE(start_date, '9999-12-31') DESC,
+            created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
     return {
         "user": serialize_user(user_row),
         "notes": [serialize_note(row) for row in notes],
         "plans": [serialize_plan(row) for row in plans],
         "todos": [serialize_todo(row) for row in todos],
+        "portfolioItems": [serialize_portfolio_item(row) for row in portfolio_items],
     }
 
 
@@ -387,6 +501,9 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         if route == "/api/plans":
             self.handle_create_plan()
             return
+        if route == "/api/portfolio":
+            self.handle_create_portfolio_item()
+            return
         if route == "/api/todos":
             self.handle_create_todo()
             return
@@ -396,6 +513,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         route = self.route_path()
         note_match = re.fullmatch(r"/api/notes/(\d{4}-\d{2}-\d{2})", route)
         plan_match = re.fullmatch(r"/api/plans/([a-f0-9-]+)", route)
+        portfolio_match = re.fullmatch(r"/api/portfolio/([a-f0-9-]+)", route)
         todo_lane_match = re.fullmatch(r"/api/todos/([a-f0-9-]+)/lane/(ideas|month|week|today|done)", route)
         todo_match = re.fullmatch(r"/api/todos/([a-f0-9-]+)", route)
         if note_match:
@@ -403,6 +521,9 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
         if plan_match:
             self.handle_update_plan(plan_match.group(1))
+            return
+        if portfolio_match:
+            self.handle_update_portfolio_item(portfolio_match.group(1))
             return
         if todo_lane_match:
             self.handle_update_todo_lane(todo_lane_match.group(1), todo_lane_match.group(2))
@@ -415,9 +536,13 @@ class PlanboardHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         route = self.route_path()
         plan_match = re.fullmatch(r"/api/plans/([a-f0-9-]+)", route)
+        portfolio_match = re.fullmatch(r"/api/portfolio/([a-f0-9-]+)", route)
         todo_match = re.fullmatch(r"/api/todos/([a-f0-9-]+)", route)
         if plan_match:
             self.handle_delete_plan(plan_match.group(1))
+            return
+        if portfolio_match:
+            self.handle_delete_portfolio_item(portfolio_match.group(1))
             return
         if todo_match:
             self.handle_delete_todo(todo_match.group(1))
@@ -743,6 +868,128 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
         self.respond_json({"plan": serialize_plan(plan)})
 
+    def handle_create_portfolio_item(self) -> None:
+        try:
+            payload = self.parse_json()
+            item_data = normalize_portfolio_payload(payload)
+        except ValueError as error:
+            self.respond_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            return
+
+        try:
+            connection, user = self.auth_user()
+        except PermissionError:
+            return
+
+        item_id = str(uuid4())
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO portfolio_items (
+                    id, user_id, type, title, organization, role, teammates,
+                    start_date, end_date, status, achievement, links, notes,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    user["id"],
+                    item_data["type"],
+                    item_data["title"],
+                    item_data["organization"],
+                    item_data["role"],
+                    item_data["teammates"],
+                    item_data["start_date"],
+                    item_data["end_date"],
+                    item_data["status"],
+                    item_data["achievement"],
+                    item_data["links"],
+                    item_data["notes"],
+                    item_data["created_at"],
+                    item_data["updated_at"],
+                ),
+            )
+            item = connection.execute(
+                "SELECT * FROM portfolio_items WHERE id = ? AND user_id = ?",
+                (item_id, user["id"]),
+            ).fetchone()
+        connection.close()
+        self.respond_json({"portfolioItem": serialize_portfolio_item(item)}, HTTPStatus.CREATED)
+
+    def handle_update_portfolio_item(self, item_id: str) -> None:
+        try:
+            payload = self.parse_json()
+        except ValueError:
+            return
+
+        try:
+            connection, user = self.auth_user()
+        except PermissionError:
+            return
+
+        existing = connection.execute(
+            "SELECT * FROM portfolio_items WHERE id = ? AND user_id = ?",
+            (item_id, user["id"]),
+        ).fetchone()
+        if not existing:
+            connection.close()
+            self.respond_json({"error": "Portfolio item not found."}, HTTPStatus.NOT_FOUND)
+            return
+
+        try:
+            item_data = normalize_portfolio_payload(payload, existing["created_at"])
+        except ValueError as error:
+            connection.close()
+            self.respond_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            return
+
+        with connection:
+            connection.execute(
+                """
+                UPDATE portfolio_items
+                SET type = ?, title = ?, organization = ?, role = ?, teammates = ?,
+                    start_date = ?, end_date = ?, status = ?, achievement = ?,
+                    links = ?, notes = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    item_data["type"],
+                    item_data["title"],
+                    item_data["organization"],
+                    item_data["role"],
+                    item_data["teammates"],
+                    item_data["start_date"],
+                    item_data["end_date"],
+                    item_data["status"],
+                    item_data["achievement"],
+                    item_data["links"],
+                    item_data["notes"],
+                    item_data["updated_at"],
+                    item_id,
+                    user["id"],
+                ),
+            )
+            item = connection.execute(
+                "SELECT * FROM portfolio_items WHERE id = ? AND user_id = ?",
+                (item_id, user["id"]),
+            ).fetchone()
+        connection.close()
+        self.respond_json({"portfolioItem": serialize_portfolio_item(item)})
+
+    def handle_delete_portfolio_item(self, item_id: str) -> None:
+        try:
+            connection, user = self.auth_user()
+        except PermissionError:
+            return
+        with connection:
+            connection.execute(
+                "DELETE FROM portfolio_items WHERE id = ? AND user_id = ?",
+                (item_id, user["id"]),
+            )
+        connection.close()
+        self.respond_json({"ok": True})
+
     def handle_create_todo(self) -> None:
         try:
             payload = self.parse_json()
@@ -917,6 +1164,18 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             connection, user = self.auth_user()
         except PermissionError:
             return
+        existing = connection.execute(
+            "SELECT daily FROM todos WHERE id = ? AND user_id = ?",
+            (todo_id, user["id"]),
+        ).fetchone()
+        if not existing:
+            connection.close()
+            self.respond_json({"error": "Task not found."}, HTTPStatus.NOT_FOUND)
+            return
+        if existing["daily"]:
+            connection.close()
+            self.respond_json({"error": "Daily tasks cannot be moved by lane."}, HTTPStatus.BAD_REQUEST)
+            return
         done = 1 if lane == "done" else 0
         with connection:
             connection.execute(
@@ -979,6 +1238,20 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             connection.close()
             self.respond_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
             return
+
+        for todo_id, _, _, _ in normalized_updates:
+            existing = connection.execute(
+                "SELECT daily FROM todos WHERE id = ? AND user_id = ?",
+                (todo_id, user["id"]),
+            ).fetchone()
+            if not existing:
+                connection.close()
+                self.respond_json({"error": "Task not found."}, HTTPStatus.NOT_FOUND)
+                return
+            if existing["daily"]:
+                connection.close()
+                self.respond_json({"error": "Daily tasks cannot be reordered."}, HTTPStatus.BAD_REQUEST)
+                return
 
         with connection:
             for todo_id, lane, sort_order, done in normalized_updates:

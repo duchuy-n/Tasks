@@ -3,6 +3,8 @@
   const FIREBASE_SDK_VERSION = config.FIREBASE_SDK_VERSION || "12.4.0";
   const LANE_SET = new Set(["ideas", "month", "week", "today", "done"]);
   const PRIORITY_SET = new Set(["low", "medium", "high"]);
+  const PORTFOLIO_TYPE_SET = new Set(["project", "competition"]);
+  const PORTFOLIO_STATUS_SET = new Set(["planned", "active", "completed"]);
 
   let clientPromise = null;
   let authReadyPromise = null;
@@ -85,6 +87,10 @@
     return client.firestoreMod.collection(client.db, "users", uid, "plans");
   }
 
+  function portfolioRef(client, uid) {
+    return client.firestoreMod.collection(client.db, "users", uid, "portfolio");
+  }
+
   function todosRef(client, uid) {
     return client.firestoreMod.collection(client.db, "users", uid, "todos");
   }
@@ -95,6 +101,10 @@
 
   function planDocRef(client, uid, planId) {
     return client.firestoreMod.doc(client.db, "users", uid, "plans", planId);
+  }
+
+  function portfolioDocRef(client, uid, itemId) {
+    return client.firestoreMod.doc(client.db, "users", uid, "portfolio", itemId);
   }
 
   function todoDocRef(client, uid, todoId) {
@@ -198,6 +208,74 @@
     return parsed;
   }
 
+  function normalizePortfolioPayload(body = {}, existing = {}) {
+    const type = String(body.type || "project").trim().toLowerCase() || "project";
+    const title = String(body.title || "").trim();
+    const organization = String(body.organization || "").trim();
+    const role = String(body.role || "").trim();
+    const teammates = String(body.teammates || "").trim();
+    const startDate = body.startDate == null ? null : normalizeDateInput(body.startDate) || null;
+    const endDate = body.endDate == null ? null : normalizeDateInput(body.endDate) || null;
+    const status = String(body.status || "active").trim().toLowerCase() || "active";
+    const achievement = String(body.achievement || "").trim();
+    const links = String(body.links || "").trim();
+    const notes = String(body.notes || "").trim();
+    if (!PORTFOLIO_TYPE_SET.has(type)) {
+      throw createError("Portfolio type is invalid.", 400);
+    }
+    if (!PORTFOLIO_STATUS_SET.has(status)) {
+      throw createError("Portfolio status is invalid.", 400);
+    }
+    if (title.length < 2) {
+      throw createError("Portfolio title is too short.", 400);
+    }
+    if (title.length > 160) {
+      throw createError("Portfolio title is too long.", 400);
+    }
+    if (organization.length > 160) {
+      throw createError("Organization is too long.", 400);
+    }
+    if (role.length > 160) {
+      throw createError("Role is too long.", 400);
+    }
+    if (teammates.length > 1000) {
+      throw createError("Teammates field is too long.", 400);
+    }
+    if (startDate && !isValidDate(startDate)) {
+      throw createError("Start date is invalid.", 400);
+    }
+    if (endDate && !isValidDate(endDate)) {
+      throw createError("End date is invalid.", 400);
+    }
+    if (startDate && endDate && endDate < startDate) {
+      throw createError("End date cannot be before start date.", 400);
+    }
+    if (achievement.length > 1000) {
+      throw createError("Achievement is too long.", 400);
+    }
+    if (links.length > 2000) {
+      throw createError("Links field is too long.", 400);
+    }
+    if (notes.length > 5000) {
+      throw createError("Portfolio notes are too long.", 400);
+    }
+    return {
+      type,
+      title,
+      organization,
+      role,
+      teammates,
+      startDate,
+      endDate,
+      status,
+      achievement,
+      links,
+      notes,
+      createdAt: String(existing.createdAt || nowIso()),
+      updatedAt: nowIso(),
+    };
+  }
+
   function compareCreatedDesc(left, right) {
     return String(right.createdAt || "").localeCompare(String(left.createdAt || ""));
   }
@@ -230,6 +308,26 @@
       timeLabel: String(data.timeLabel || ""),
       title: String(data.title || ""),
       details: String(data.details || ""),
+      createdAt: String(data.createdAt || ""),
+      updatedAt: String(data.updatedAt || ""),
+    };
+  }
+
+  function serializePortfolioDoc(snapshot) {
+    const data = snapshot.data() || {};
+    return {
+      id: snapshot.id,
+      type: String(data.type || "project"),
+      title: String(data.title || ""),
+      organization: String(data.organization || ""),
+      role: String(data.role || ""),
+      teammates: String(data.teammates || ""),
+      startDate: data.startDate ? String(data.startDate) : null,
+      endDate: data.endDate ? String(data.endDate) : null,
+      status: String(data.status || "active"),
+      achievement: String(data.achievement || ""),
+      links: String(data.links || ""),
+      notes: String(data.notes || ""),
       createdAt: String(data.createdAt || ""),
       updatedAt: String(data.updatedAt || ""),
     };
@@ -309,11 +407,21 @@
     return serializeUserDoc(user.uid, user, merged);
   }
 
+  function comparePortfolioItems(left, right) {
+    const statusRank = { planned: 0, active: 1, completed: 2 };
+    return (
+      (statusRank[left.status] ?? 9) - (statusRank[right.status] ?? 9) ||
+      String(right.startDate || "0000-00-00").localeCompare(String(left.startDate || "0000-00-00")) ||
+      compareCreatedDesc(left, right)
+    );
+  }
+
   async function getBootstrapPayload(client, user) {
-    const [userSnapshot, noteSnapshots, planSnapshots, todoSnapshots] = await Promise.all([
+    const [userSnapshot, noteSnapshots, planSnapshots, portfolioSnapshots, todoSnapshots] = await Promise.all([
       client.firestoreMod.getDoc(userRef(client, user.uid)),
       client.firestoreMod.getDocs(notesRef(client, user.uid)),
       client.firestoreMod.getDocs(plansRef(client, user.uid)),
+      client.firestoreMod.getDocs(portfolioRef(client, user.uid)),
       client.firestoreMod.getDocs(todosRef(client, user.uid)),
     ]);
 
@@ -333,6 +441,10 @@
         String(left.createdAt || "").localeCompare(String(right.createdAt || ""))
       );
 
+    const portfolioItems = portfolioSnapshots.docs
+      .map(serializePortfolioDoc)
+      .sort(comparePortfolioItems);
+
     const todos = todoSnapshots.docs
       .map(serializeTodoDoc)
       .sort((left, right) =>
@@ -345,6 +457,7 @@
       user: serializedUser,
       notes,
       plans,
+      portfolioItems,
       todos,
     };
   }
@@ -366,6 +479,10 @@
         String(left.createdAt || "").localeCompare(String(right.createdAt || ""))
       );
 
+    const portfolioItems = snapshots.portfolio.docs
+      .map(serializePortfolioDoc)
+      .sort(comparePortfolioItems);
+
     const todos = snapshots.todos.docs
       .map(serializeTodoDoc)
       .sort((left, right) =>
@@ -378,6 +495,7 @@
       user: serializedUser,
       notes,
       plans,
+      portfolioItems,
       todos,
     };
   }
@@ -585,6 +703,40 @@
     return { ok: true };
   }
 
+  async function handleCreatePortfolioItem(client, options) {
+    const body = requireBody(options);
+    const user = await requireUser(client);
+    const ref = client.firestoreMod.doc(portfolioRef(client, user.uid));
+    const item = {
+      id: ref.id,
+      ...normalizePortfolioPayload(body),
+    };
+    await client.firestoreMod.setDoc(ref, item);
+    return { portfolioItem: item };
+  }
+
+  async function handleUpdatePortfolioItem(client, itemId, options) {
+    const body = requireBody(options);
+    const user = await requireUser(client);
+    const ref = portfolioDocRef(client, user.uid, itemId);
+    const snapshot = await client.firestoreMod.getDoc(ref);
+    if (!snapshot.exists()) {
+      throw createError("Portfolio item not found.", 404);
+    }
+    const item = {
+      id: itemId,
+      ...normalizePortfolioPayload(body, snapshot.data() || {}),
+    };
+    await client.firestoreMod.setDoc(ref, item);
+    return { portfolioItem: item };
+  }
+
+  async function handleDeletePortfolioItem(client, itemId) {
+    const user = await requireUser(client);
+    await client.firestoreMod.deleteDoc(portfolioDocRef(client, user.uid, itemId));
+    return { ok: true };
+  }
+
   async function handleCreateTodo(client, options) {
     const body = requireBody(options);
     const title = String(body.title || "").trim();
@@ -709,6 +861,9 @@
       throw createError("Task not found.", 404);
     }
     const previous = normalizeExistingTodoData(todoId, snapshot.data() || {});
+    if (previous.daily) {
+      throw createError("Daily tasks cannot be moved by lane.", 400);
+    }
     const todo = {
       ...previous,
       lane: lane === "done" ? previous.lane : lane,
@@ -760,14 +915,19 @@
       if (!snapshot.exists()) {
         throw createError("Task not found.", 404);
       }
+      const previous = normalizeExistingTodoData(update.todoId, snapshot.data() || {});
+      if (previous.daily) {
+        throw createError("Daily tasks cannot be reordered.", 400);
+      }
       batch.set(
         todoDocRef(client, user.uid, update.todoId),
-        normalizeExistingTodoData(update.todoId, snapshot.data() || {}, {
+        {
+          ...previous,
           lane: update.lane,
           sortOrder: update.sortOrder,
           done: update.done,
           updatedAt: nowIso(),
-        })
+        }
       );
     });
     await batch.commit();
@@ -826,6 +986,9 @@
       if (path === "/plans" && (options.method || "GET") === "POST") {
         return handleCreatePlan(client, options);
       }
+      if (path === "/portfolio" && (options.method || "GET") === "POST") {
+        return handleCreatePortfolioItem(client, options);
+      }
       if (path === "/todos" && (options.method || "GET") === "POST") {
         return handleCreateTodo(client, options);
       }
@@ -838,6 +1001,7 @@
 
       const noteMatch = /^\/notes\/(\d{4}-\d{2}-\d{2})$/.exec(path);
       const planMatch = /^\/plans\/([A-Za-z0-9_-]+)$/.exec(path);
+      const portfolioMatch = /^\/portfolio\/([A-Za-z0-9_-]+)$/.exec(path);
       const todoLaneMatch = /^\/todos\/([A-Za-z0-9_-]+)\/lane\/(ideas|month|week|today|done)$/.exec(path);
       const todoMatch = /^\/todos\/([A-Za-z0-9_-]+)$/.exec(path);
 
@@ -849,6 +1013,12 @@
       }
       if (planMatch && (options.method || "GET") === "DELETE") {
         return handleDeletePlan(client, planMatch[1]);
+      }
+      if (portfolioMatch && (options.method || "GET") === "PUT") {
+        return handleUpdatePortfolioItem(client, portfolioMatch[1], options);
+      }
+      if (portfolioMatch && (options.method || "GET") === "DELETE") {
+        return handleDeletePortfolioItem(client, portfolioMatch[1]);
       }
       if (todoLaneMatch && (options.method || "GET") === "PUT") {
         return handleUpdateTodoLane(client, todoLaneMatch[1], todoLaneMatch[2]);
@@ -878,11 +1048,12 @@
       user: null,
       notes: null,
       plans: null,
+      portfolio: null,
       todos: null,
     };
     const unsubscriptions = [];
     const emitIfReady = () => {
-      if (snapshots.user && snapshots.notes && snapshots.plans && snapshots.todos) {
+      if (snapshots.user && snapshots.notes && snapshots.plans && snapshots.portfolio && snapshots.todos) {
         onPayload(serializeBootstrapSnapshots(user, snapshots));
       }
     };
@@ -907,6 +1078,12 @@
     unsubscriptions.push(
       client.firestoreMod.onSnapshot(plansRef(client, user.uid), (snapshot) => {
         snapshots.plans = snapshot;
+        emitIfReady();
+      }, handleError)
+    );
+    unsubscriptions.push(
+      client.firestoreMod.onSnapshot(portfolioRef(client, user.uid), (snapshot) => {
+        snapshots.portfolio = snapshot;
         emitIfReady();
       }, handleError)
     );

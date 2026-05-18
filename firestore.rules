@@ -10,7 +10,8 @@ service cloud.firestore {
     }
 
     function isDate(value) {
-      return value is string && value.matches('^\\d{4}-\\d{2}-\\d{2}$');
+      return value is string
+        && value.matches('^\\d{4}-((01|03|05|07|08|10|12)-(0[1-9]|[12][0-9]|3[01])|(04|06|09|11)-(0[1-9]|[12][0-9]|30)|02-(0[1-9]|1[0-9]|2[0-9]))$');
     }
 
     function isOptionalDate(value) {
@@ -23,6 +24,12 @@ service cloud.firestore {
 
     function isTimestampText(value) {
       return value is string && value.size() >= 10 && value.size() <= 40;
+    }
+
+    function createdAtUnchanged() {
+      return ('createdAt' in resource.data)
+        ? (('createdAt' in request.resource.data) && request.resource.data.createdAt == resource.data.createdAt)
+        : !('createdAt' in request.resource.data);
     }
 
     function validUserProfile() {
@@ -60,6 +67,33 @@ service cloud.firestore {
         && isTimestampText(request.resource.data.updatedAt);
     }
 
+    function validPortfolioItem(itemId) {
+      return request.resource.data.keys().hasOnly(['id', 'type', 'title', 'organization', 'role', 'teammates', 'startDate', 'endDate', 'status', 'achievement', 'links', 'notes', 'createdAt', 'updatedAt'])
+        && request.resource.data.id == itemId
+        && request.resource.data.type in ['project', 'competition']
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 2
+        && request.resource.data.title.size() <= 160
+        && request.resource.data.organization is string
+        && request.resource.data.organization.size() <= 160
+        && request.resource.data.role is string
+        && request.resource.data.role.size() <= 160
+        && request.resource.data.teammates is string
+        && request.resource.data.teammates.size() <= 1000
+        && isOptionalDate(request.resource.data.startDate)
+        && isOptionalDate(request.resource.data.endDate)
+        && (request.resource.data.startDate == null || request.resource.data.endDate == null || request.resource.data.endDate >= request.resource.data.startDate)
+        && request.resource.data.status in ['planned', 'active', 'completed']
+        && request.resource.data.achievement is string
+        && request.resource.data.achievement.size() <= 1000
+        && request.resource.data.links is string
+        && request.resource.data.links.size() <= 2000
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 5000
+        && isTimestampText(request.resource.data.createdAt)
+        && isTimestampText(request.resource.data.updatedAt);
+    }
+
     function validTodo(todoId) {
       return request.resource.data.keys().hasOnly(['id', 'title', 'details', 'subtasks', 'dueDate', 'lane', 'sortOrder', 'priority', 'done', 'daily', 'dailyCompletedOn', 'streak', 'createdAt', 'updatedAt'])
         && request.resource.data.id == todoId
@@ -78,6 +112,7 @@ service cloud.firestore {
         && request.resource.data.priority in ['low', 'medium', 'high']
         && request.resource.data.done is bool
         && request.resource.data.daily is bool
+        && (!request.resource.data.daily || (request.resource.data.lane == 'today' && request.resource.data.done == false))
         && isOptionalDate(request.resource.data.dailyCompletedOn)
         && request.resource.data.streak is int
         && request.resource.data.streak >= 0
@@ -88,7 +123,8 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read, delete: if isOwner(userId);
-      allow create, update: if isOwner(userId) && validUserProfile();
+      allow create: if isOwner(userId) && validUserProfile();
+      allow update: if isOwner(userId) && validUserProfile() && createdAtUnchanged();
 
       match /notes/{noteId} {
         allow read, delete: if isOwner(userId);
@@ -97,12 +133,20 @@ service cloud.firestore {
 
       match /plans/{planId} {
         allow read, delete: if isOwner(userId);
-        allow create, update: if isOwner(userId) && validPlan(planId);
+        allow create: if isOwner(userId) && validPlan(planId);
+        allow update: if isOwner(userId) && validPlan(planId) && createdAtUnchanged();
+      }
+
+      match /portfolio/{itemId} {
+        allow read, delete: if isOwner(userId);
+        allow create: if isOwner(userId) && validPortfolioItem(itemId);
+        allow update: if isOwner(userId) && validPortfolioItem(itemId) && createdAtUnchanged();
       }
 
       match /todos/{todoId} {
         allow read, delete: if isOwner(userId);
-        allow create, update: if isOwner(userId) && validTodo(todoId);
+        allow create: if isOwner(userId) && validTodo(todoId);
+        allow update: if isOwner(userId) && validTodo(todoId) && createdAtUnchanged();
       }
     }
   }

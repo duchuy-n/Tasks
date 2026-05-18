@@ -1,9 +1,11 @@
-const CACHE_NAME = "planboard-shell-__PLANBOARD_CACHE_VERSION__";
+const CACHE_VERSION = "__PLANBOARD_CACHE_VERSION__";
+const CACHE_NAME = `planboard-shell-${CACHE_VERSION === "__PLANBOARD_CACHE_VERSION__" ? "dev" : CACHE_VERSION}`;
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
   "./planboard-domain.js",
+  "./portfolio-utils.js",
   "./planboard-api-client.js",
   "./app.js",
   "./firebase-adapter.js",

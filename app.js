@@ -1,6 +1,7 @@
 ﻿const APP_CONFIG = window.__PLANBOARD_CONFIG__ || {};
 const DATA_SOURCE = APP_CONFIG.DATA_SOURCE || "rest";
 const PLANBOARD_DOMAIN = window.PlanboardDomain || {};
+const PORTFOLIO_UTILS = window.PlanboardPortfolioUtils || {};
 const FIREBASE_ADAPTER = window.PlanboardFirebaseAdapter || null;
 const API_CLIENT = window.PlanboardApiClient
   ? window.PlanboardApiClient.create({ config: APP_CONFIG, firebaseAdapter: FIREBASE_ADAPTER })
@@ -23,6 +24,7 @@ const DAY_FORMATTER = new Intl.DateTimeFormat("en-US", {
 const SHORT_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
   month: "short",
+  year: "numeric",
 });
 
 const authScreen = document.querySelector("#authScreen");
@@ -35,6 +37,7 @@ const workspaceNameLabel = document.querySelector("#workspaceNameLabel");
 const userNameLabel = document.querySelector("#userNameLabel");
 const selectedDateLabel = document.querySelector("#selectedDateLabel");
 const selectedDateMeta = document.querySelector("#selectedDateMeta");
+const boardTitle = document.querySelector(".board-header__copy h1");
 const selectedDateInput = document.querySelector("#selectedDateInput");
 const planDateInput = document.querySelector("#planDateInput");
 const dailyNoteInput = document.querySelector("#dailyNoteInput");
@@ -43,14 +46,17 @@ const taskEditorId = document.querySelector("#taskEditorId");
 const planEditorId = document.querySelector("#planEditorId");
 const taskSubmitButton = document.querySelector("#taskSubmitButton");
 const planSubmitButton = document.querySelector("#planSubmitButton");
+const portfolioSubmitButton = document.querySelector("#portfolioSubmitButton");
 const completedMeta = document.querySelector("#completedMeta");
 const clearCompletedButton = document.querySelector("#clearCompletedButton");
 const allTaskCountBadge = document.querySelector("#allTaskCountBadge");
 const allTaskCountHeader = document.querySelector("#allTaskCountHeader");
 const boardViewButton = document.querySelector("#boardViewButton");
 const calendarViewButton = document.querySelector("#calendarViewButton");
+const portfolioViewButton = document.querySelector("#portfolioViewButton");
 const boardView = document.querySelector("#boardView");
 const calendarView = document.querySelector("#calendarView");
+const portfolioView = document.querySelector("#portfolioView");
 const calendarSelectedDateLabel = document.querySelector("#calendarSelectedDateLabel");
 const calendarSelectedDateMeta = document.querySelector("#calendarSelectedDateMeta");
 const calendarTimelineList = document.querySelector("#calendarTimelineList");
@@ -65,14 +71,23 @@ const noteCount = document.querySelector("#noteCount");
 const planCount = document.querySelector("#planCount");
 const syncStatusLabel = document.querySelector("#syncStatusLabel");
 const syncTimeLabel = document.querySelector("#syncTimeLabel");
+const composerEyebrow = document.querySelector("#composerEyebrow");
 const composerTitle = document.querySelector("#composerTitle");
 const composerHint = document.querySelector("#composerHint");
 const installButton = document.querySelector("#installButton");
 const notificationButton = document.querySelector("#notificationButton");
 const refreshButton = document.querySelector("#refreshButton");
+const openComposerButton = document.querySelector("#openComposerButton");
 const todoCardTemplate = document.querySelector("#todoCardTemplate");
 const planItemTemplate = document.querySelector("#planItemTemplate");
+const portfolioItemTemplate = document.querySelector("#portfolioItemTemplate");
 const planList = document.querySelector("#planList");
+const portfolioActiveList = document.querySelector("#portfolioActiveList");
+const portfolioPlannedList = document.querySelector("#portfolioPlannedList");
+const portfolioCompletedList = document.querySelector("#portfolioCompletedList");
+const portfolioFilterButtons = [...document.querySelectorAll("[data-portfolio-filter]")];
+const portfolioYearFilter = document.querySelector("#portfolioYearFilter");
+const portfolioSearchInput = document.querySelector("#portfolioSearchInput");
 const todoLaneInput = document.querySelector("#todoLaneInput");
 const todoPriorityInput = document.querySelector("#todoPriorityInput");
 const todoDueDateInput = document.querySelector("#todoDueDateInput");
@@ -80,6 +95,19 @@ const todoDailyInput = document.querySelector("#todoDailyInput");
 const todoTitleInput = document.querySelector("#todoTitleInput");
 const planTitleInput = document.querySelector("#planTitleInput");
 const planDetailsInput = document.querySelector("#planDetailsInput");
+const portfolioEditorId = document.querySelector("#portfolioEditorId");
+const portfolioTypeInput = document.querySelector("#portfolioTypeInput");
+const portfolioStatusInput = document.querySelector("#portfolioStatusInput");
+const portfolioTitleInput = document.querySelector("#portfolioTitleInput");
+const portfolioOrganizationInput = document.querySelector("#portfolioOrganizationInput");
+const portfolioRoleInput = document.querySelector("#portfolioRoleInput");
+const portfolioStartDateInput = document.querySelector("#portfolioStartDateInput");
+const portfolioEndDateInput = document.querySelector("#portfolioEndDateInput");
+const portfolioTeammatesInput = document.querySelector("#portfolioTeammatesInput");
+const portfolioAchievementInput = document.querySelector("#portfolioAchievementInput");
+const portfolioLinksInput = document.querySelector("#portfolioLinksInput");
+const portfolioNotesInput = document.querySelector("#portfolioNotesInput");
+const portfolioMoreDetails = document.querySelector("#portfolioMoreDetails");
 const quickAddForm = document.querySelector("#quickAddForm");
 const quickAddInput = document.querySelector("#quickAddInput");
 const quickAddLaneInput = document.querySelector("#quickAddLaneInput");
@@ -119,6 +147,24 @@ const taskActionTitle = document.querySelector("#taskActionTitle");
 const taskActionEditButton = document.querySelector("#taskActionEditButton");
 const taskActionMoveList = document.querySelector("#taskActionMoveList");
 const closeTaskActionButton = document.querySelector("#closeTaskActionButton");
+const portfolioDetailOverlay = document.querySelector("#portfolioDetailOverlay");
+const portfolioDetailPanel = document.querySelector("#portfolioDetailPanel");
+const portfolioDetailType = document.querySelector("#portfolioDetailType");
+const portfolioDetailTitle = document.querySelector("#portfolioDetailTitle");
+const portfolioDetailMeta = document.querySelector("#portfolioDetailMeta");
+const portfolioDetailStatus = document.querySelector("#portfolioDetailStatus");
+const portfolioDetailDates = document.querySelector("#portfolioDetailDates");
+const portfolioDetailRole = document.querySelector("#portfolioDetailRole");
+const portfolioDetailTeammates = document.querySelector("#portfolioDetailTeammates");
+const portfolioDetailAchievementBlock = document.querySelector("#portfolioDetailAchievementBlock");
+const portfolioDetailAchievement = document.querySelector("#portfolioDetailAchievement");
+const portfolioDetailLinksBlock = document.querySelector("#portfolioDetailLinksBlock");
+const portfolioDetailLinks = document.querySelector("#portfolioDetailLinks");
+const portfolioDetailNotesBlock = document.querySelector("#portfolioDetailNotesBlock");
+const portfolioDetailNotes = document.querySelector("#portfolioDetailNotes");
+const editPortfolioDetailButton = document.querySelector("#editPortfolioDetailButton");
+const deletePortfolioDetailButton = document.querySelector("#deletePortfolioDetailButton");
+const closePortfolioDetailButton = document.querySelector("#closePortfolioDetailButton");
 const undoToast = document.querySelector("#undoToast");
 const undoToastLabel = document.querySelector("#undoToastLabel");
 const undoToastButton = document.querySelector("#undoToastButton");
@@ -145,6 +191,7 @@ let syncIntervalId = 0;
 let liveSyncUnsubscribe = null;
 let liveSyncGeneration = 0;
 let dragTodoId = "";
+let dragPortfolioItemId = "";
 let dragCardPosition = "after";
 let statusTimerId = 0;
 let detailSaveTimerId = 0;
@@ -160,11 +207,15 @@ const state = {
   selectedDate: loadUiState().selectedDate,
   filterMode: loadUiState().filterMode,
   activeView: loadUiState().activeView,
+  portfolioFilter: loadUiState().portfolioFilter,
+  portfolioYear: loadUiState().portfolioYear,
+  portfolioSearch: loadUiState().portfolioSearch,
   mobileView: loadUiState().mobileView,
   sortMode: loadUiState().sortMode,
   theme: loadUiState().theme,
   notesByDate: {},
   plans: [],
+  portfolioItems: [],
   todos: [],
   syncing: false,
   editingTaskId: "",
@@ -176,6 +227,7 @@ const state = {
   detailSaving: false,
   detailCompletedCollapsed: true,
   taskActionTaskId: "",
+  portfolioDetailItemId: "",
   lastSyncedAt: 0,
   undoAction: null,
 };
@@ -189,6 +241,9 @@ function loadUiState() {
   const defaults = {
     selectedDate: todayIso(),
     activeView: "board",
+    portfolioFilter: "all",
+    portfolioYear: "all",
+    portfolioSearch: "",
     filterMode: "all",
     mobileView: "today",
     sortMode: "manual",
@@ -196,10 +251,19 @@ function loadUiState() {
   };
   try {
     const parsed = JSON.parse(localStorage.getItem(UI_KEY) || "null");
+    const activeView = parsed && ["board", "calendar", "portfolio"].includes(parsed.activeView)
+      ? parsed.activeView
+      : "board";
+    const portfolioFilter = parsed && ["all", "project", "competition"].includes(parsed.portfolioFilter)
+      ? parsed.portfolioFilter
+      : "all";
     return {
       ...defaults,
       ...(parsed || {}),
-      activeView: parsed && parsed.activeView === "calendar" ? "calendar" : "board",
+      activeView,
+      portfolioFilter,
+      portfolioYear: String((parsed && parsed.portfolioYear) || "all"),
+      portfolioSearch: String((parsed && parsed.portfolioSearch) || ""),
       selectedDate: normalizeIsoDateInput(parsed && parsed.selectedDate) || defaults.selectedDate,
     };
   } catch {
@@ -213,6 +277,9 @@ function saveUiState() {
     JSON.stringify({
       selectedDate: state.selectedDate,
       activeView: state.activeView,
+      portfolioFilter: state.portfolioFilter,
+      portfolioYear: state.portfolioYear,
+      portfolioSearch: state.portfolioSearch,
       filterMode: state.filterMode,
       mobileView: state.mobileView,
       sortMode: state.sortMode,
@@ -240,6 +307,24 @@ function bindEvents() {
 
   boardViewButton.addEventListener("click", () => setActiveView("board"));
   calendarViewButton.addEventListener("click", () => setActiveView("calendar"));
+  portfolioViewButton.addEventListener("click", () => setActiveView("portfolio"));
+  portfolioFilterButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      state.portfolioFilter = button.dataset.portfolioFilter || "all";
+      saveUiState();
+      renderPortfolio();
+    });
+  });
+  portfolioYearFilter?.addEventListener("change", () => {
+    state.portfolioYear = portfolioYearFilter.value || "all";
+    saveUiState();
+    renderPortfolio();
+  });
+  portfolioSearchInput?.addEventListener("input", () => {
+    state.portfolioSearch = portfolioSearchInput.value.trim();
+    saveUiState();
+    renderPortfolio();
+  });
   calendarMonthSelect.addEventListener("change", () => {
     const current = new Date(`${state.selectedDate}T00:00:00`);
     const next = new Date(current.getFullYear(), Number(calendarMonthSelect.value), 1);
@@ -253,8 +338,11 @@ function bindEvents() {
   document.querySelector("#tabTaskButton").addEventListener("click", () => setComposerTab("task"));
   document.querySelector("#tabNoteButton").addEventListener("click", () => setComposerTab("note"));
   document.querySelector("#tabPlanButton").addEventListener("click", () => setComposerTab("plan"));
+  document.querySelector("#tabPortfolioButton").addEventListener("click", () => setComposerTab("portfolio"));
 
-  document.querySelector("#openComposerButton").addEventListener("click", () => openComposer("task"));
+  openComposerButton.addEventListener("click", () => {
+    openComposer(composerTabForActiveView(), { locked: true });
+  });
   todoLaneInput.addEventListener("change", syncTaskDateByLane);
   quickAddForm?.addEventListener("submit", handleQuickAdd);
 
@@ -309,6 +397,26 @@ function bindEvents() {
       closeTaskActionSheet();
     }
   });
+  closePortfolioDetailButton.addEventListener("click", closePortfolioDetail);
+  portfolioDetailOverlay.addEventListener("click", (event) => {
+    if (event.target === portfolioDetailOverlay) {
+      closePortfolioDetail();
+    }
+  });
+  editPortfolioDetailButton.addEventListener("click", () => {
+    const item = currentPortfolioDetailItem();
+    closePortfolioDetail();
+    if (item) {
+      openPortfolioEditor(item);
+    }
+  });
+  deletePortfolioDetailButton.addEventListener("click", async () => {
+    const item = currentPortfolioDetailItem();
+    closePortfolioDetail();
+    if (item) {
+      queuePortfolioDeleteUndo(item.id);
+    }
+  });
 
   composerOverlay.addEventListener("click", (event) => {
     if (event.target === composerOverlay) {
@@ -326,6 +434,10 @@ function bindEvents() {
     }
     if (!taskActionOverlay.classList.contains("task-action-overlay--hidden")) {
       closeTaskActionSheet();
+      return;
+    }
+    if (!portfolioDetailOverlay.classList.contains("task-detail-overlay--hidden")) {
+      closePortfolioDetail();
       return;
     }
     if (!taskDetailPanel.classList.contains("task-detail--hidden")) {
@@ -532,6 +644,42 @@ function bindEvents() {
     }
   });
 
+  document.querySelector("#portfolioComposerForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    try {
+      const editingId = portfolioEditorId.value;
+      setStatus(editingId ? "Updating portfolio item..." : "Adding portfolio item...");
+      const payload = await api(editingId ? `/portfolio/${editingId}` : "/portfolio", {
+        method: editingId ? "PUT" : "POST",
+        body: {
+          type: String(formData.get("type") || "project"),
+          title: String(formData.get("title") || "").trim(),
+          organization: String(formData.get("organization") || "").trim(),
+          role: String(formData.get("role") || "").trim(),
+          teammates: String(formData.get("teammates") || "").trim(),
+          startDate: normalizeIsoDateInput(String(formData.get("startDate") || "").trim()) || null,
+          endDate: normalizeIsoDateInput(String(formData.get("endDate") || "").trim()) || null,
+          status: String(formData.get("status") || "active"),
+          achievement: String(formData.get("achievement") || "").trim(),
+          links: String(formData.get("links") || "").trim(),
+          notes: String(formData.get("notes") || "").trim(),
+        },
+      });
+      upsertPortfolioItem(payload.portfolioItem);
+      state.lastSyncedAt = Date.now();
+      form.reset();
+      portfolioEditorId.value = "";
+      portfolioSubmitButton.textContent = "Add Portfolio Item";
+      closeComposer();
+      setActiveView("portfolio");
+      setStatus(editingId ? "Portfolio item updated." : "Portfolio item added.");
+    } catch (error) {
+      setStatus(error.message, true);
+    }
+  });
+
   document.querySelectorAll(".column").forEach((column) => {
     const lane = String(column.dataset.lane || "");
     const laneBody = column.querySelector(".column__body");
@@ -588,6 +736,51 @@ function bindEvents() {
 
     column.addEventListener("drop", handleLaneDrop);
     laneBody?.addEventListener("drop", handleLaneDrop);
+  });
+
+  document.querySelectorAll(".portfolio-section").forEach((section) => {
+    const status = String(section.dataset.portfolioStatus || "");
+    const list = section.querySelector(".portfolio-list");
+
+    const activateDropTarget = (event) => {
+      if (!dragPortfolioItemId || !status) {
+        return;
+      }
+      event.preventDefault();
+      section.classList.add("is-drop-target");
+    };
+
+    const clearDropTarget = () => {
+      section.classList.remove("is-drop-target");
+    };
+
+    const handlePortfolioDrop = async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      clearDropTarget();
+      if (!dragPortfolioItemId || !status) {
+        return;
+      }
+      await movePortfolioItemToStatus(dragPortfolioItemId, status);
+      dragPortfolioItemId = "";
+    };
+
+    section.addEventListener("dragover", activateDropTarget);
+    list?.addEventListener("dragover", activateDropTarget);
+    section.addEventListener("dragleave", (event) => {
+      if (event.relatedTarget && section.contains(event.relatedTarget)) {
+        return;
+      }
+      clearDropTarget();
+    });
+    list?.addEventListener("dragleave", (event) => {
+      if (event.relatedTarget && section.contains(event.relatedTarget)) {
+        return;
+      }
+      clearDropTarget();
+    });
+    section.addEventListener("drop", handlePortfolioDrop);
+    list?.addEventListener("drop", handlePortfolioDrop);
   });
 
   window.addEventListener("beforeinstallprompt", (event) => {
@@ -685,13 +878,20 @@ function setAuthMode(mode) {
   setAuthMessage("");
 }
 
-function openComposer(tab) {
+function openComposer(tab, options = {}) {
   taskEditorId.value = "";
   planEditorId.value = "";
+  portfolioEditorId.value = "";
   document.querySelector("#taskComposerForm").reset();
   document.querySelector("#planComposerForm").reset();
+  document.querySelector("#portfolioComposerForm").reset();
+  portfolioMoreDetails.open = false;
   taskSubmitButton.textContent = "Add Task";
   planSubmitButton.textContent = "Add Plan";
+  portfolioSubmitButton.textContent = "Add Portfolio Item";
+  composerEyebrow.textContent = "Quick Add";
+  composerOverlay.dataset.locked = options.locked ? "true" : "false";
+  composerOverlay.dataset.lockedTab = options.locked ? tab : "";
   setComposerTab(tab);
   syncDateInputs();
   if (tab === "task") {
@@ -720,30 +920,52 @@ function openComposer(tab) {
 function closeComposer() {
   taskEditorId.value = "";
   planEditorId.value = "";
+  portfolioEditorId.value = "";
   taskSubmitButton.textContent = "Add Task";
   planSubmitButton.textContent = "Add Plan";
+  portfolioSubmitButton.textContent = "Add Portfolio Item";
+  composerEyebrow.textContent = "Quick Add";
+  composerOverlay.dataset.locked = "false";
+  composerOverlay.dataset.lockedTab = "";
   composerOverlay.classList.add("composer-overlay--hidden");
 }
 
 function setComposerTab(tab) {
+  if (composerOverlay.dataset.locked === "true") {
+    tab = composerOverlay.dataset.lockedTab || composerTabForActiveView();
+  }
   state.activeComposerTab = tab;
   document.querySelector("#taskComposerForm").classList.toggle("composer-form--hidden", tab !== "task");
   document.querySelector("#noteComposerForm").classList.toggle("composer-form--hidden", tab !== "note");
   document.querySelector("#planComposerForm").classList.toggle("composer-form--hidden", tab !== "plan");
+  document.querySelector("#portfolioComposerForm").classList.toggle("composer-form--hidden", tab !== "portfolio");
   document.querySelector("#tabTaskButton").classList.toggle("is-active", tab === "task");
   document.querySelector("#tabNoteButton").classList.toggle("is-active", tab === "note");
   document.querySelector("#tabPlanButton").classList.toggle("is-active", tab === "plan");
+  document.querySelector("#tabPortfolioButton").classList.toggle("is-active", tab === "portfolio");
   const composerMoreDetails = document.querySelector("#composerMoreDetails");
   if (composerMoreDetails) {
-    composerMoreDetails.classList.toggle("is-active", tab === "note" || tab === "plan");
-    composerMoreDetails.open = tab === "note" || tab === "plan";
+    composerMoreDetails.classList.toggle("is-active", tab === "note" || tab === "plan" || tab === "portfolio");
+    composerMoreDetails.open = tab === "note" || tab === "plan" || tab === "portfolio";
   }
-  composerTitle.textContent = tab === "task" ? "Add Task" : tab === "note" ? "Daily Note" : "Daily Plan";
+  composerTitle.textContent = tab === "task" ? "Add Task" : tab === "note" ? "Daily Note" : tab === "plan" ? "Daily Plan" : "Portfolio";
   composerHint.textContent = tab === "task"
     ? "Create a task and move it between lanes when needed."
     : tab === "note"
       ? "Save a short note for the selected day."
-      : "Add a scheduled item for the selected day.";
+      : tab === "plan"
+        ? "Add a scheduled item for the selected day."
+        : "Capture a project or competition for your long-term record.";
+}
+
+function composerTabForActiveView() {
+  if (state.activeView === "calendar") {
+    return "plan";
+  }
+  if (state.activeView === "portfolio") {
+    return "portfolio";
+  }
+  return "task";
 }
 
 async function hydrateSession() {
@@ -814,6 +1036,7 @@ function clearSession(silent = false) {
   state.user = null;
   state.notesByDate = {};
   state.plans = [];
+  state.portfolioItems = [];
   state.todos = [];
   state.notified = [];
   state.detailTaskId = "";
@@ -821,12 +1044,14 @@ function clearSession(silent = false) {
   state.detailDirty = false;
   state.detailSaving = false;
   state.taskActionTaskId = "";
+  state.portfolioDetailItemId = "";
   state.lastSyncedAt = 0;
   dailyStreakResetIds.clear();
   localStorage.removeItem(TOKEN_KEY);
   saveNotifiedState();
   stopAutoSync();
   closeTaskDetail();
+  closePortfolioDetail();
   authScreen.classList.remove("app-hidden");
   appShell.classList.add("app-hidden");
   closeComposer();
@@ -841,7 +1066,7 @@ function showApp() {
 }
 
 function setActiveView(view) {
-  state.activeView = view === "calendar" ? "calendar" : "board";
+  state.activeView = ["calendar", "portfolio"].includes(view) ? view : "board";
   saveUiState();
   render();
 }
@@ -850,6 +1075,7 @@ function applyBootstrap(payload) {
   state.user = payload.user || null;
   state.notesByDate = Object.fromEntries((payload.notes || []).map((note) => [note.noteDate, note.content]));
   state.plans = payload.plans || [];
+  state.portfolioItems = sortPortfolioItems((payload.portfolioItems || []).map(hydratePortfolioItemFromServer));
   const hydratedTodos = (payload.todos || []).map(hydrateTodoFromServer);
   const resetTodos = hydratedTodos.map((todo) =>
     state.detailDirty && state.detailTaskId === todo.id ? todo : resetMissedDailyStreak(todo)
@@ -883,7 +1109,9 @@ function render() {
   renderSidebar();
   renderBoard();
   renderCalendar();
+  renderPortfolio();
   renderTaskDetail();
+  renderPortfolioDetail();
   renderUndoToast();
   renderTaskActionSheet();
   renderMobileView();
@@ -1085,11 +1313,17 @@ function renderMobileView() {
 
 function renderViewMode() {
   const isCalendar = state.activeView === "calendar";
-  appShell.dataset.activeView = isCalendar ? "calendar" : "board";
-  boardViewButton.classList.toggle("is-active", !isCalendar);
+  const isPortfolio = state.activeView === "portfolio";
+  appShell.dataset.activeView = isCalendar ? "calendar" : isPortfolio ? "portfolio" : "board";
+  boardTitle.textContent = isPortfolio ? "Portfolio" : "Tasks";
+  openComposerButton.textContent = isPortfolio ? "+ Add Portfolio" : isCalendar ? "+ Add Plan" : "+ Add Task";
+  boardViewButton.classList.toggle("is-active", !isCalendar && !isPortfolio);
   calendarViewButton.classList.toggle("is-active", isCalendar);
-  boardView.classList.toggle("board-view--hidden", isCalendar);
+  portfolioViewButton.classList.toggle("is-active", isPortfolio);
+  boardView.classList.toggle("board-view--hidden", isCalendar || isPortfolio);
   calendarView.classList.toggle("board-view--hidden", !isCalendar);
+  portfolioView.classList.toggle("board-view--hidden", !isPortfolio);
+  clearCompletedButton.hidden = isPortfolio || isCalendar || state.todos.filter((todo) => todo.done).length === 0;
 }
 
 function applyTheme() {
@@ -1279,6 +1513,196 @@ function renderCalendarTimeline(todos) {
   });
 }
 
+function renderPortfolio() {
+  const allItems = sortPortfolioItems(state.portfolioItems || []);
+  renderPortfolioYearFilter(allItems);
+  if (portfolioSearchInput && portfolioSearchInput.value !== state.portfolioSearch) {
+    portfolioSearchInput.value = state.portfolioSearch;
+  }
+  const items = filterPortfolioItems(allItems);
+  const grouped = groupPortfolioItems(items);
+  portfolioFilterButtons.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.portfolioFilter === state.portfolioFilter);
+  });
+
+  if (state.activeView === "portfolio") {
+    allTaskCountHeader.textContent = String(items.length);
+    completedMeta.textContent = `${grouped.planned.length} planned / ${grouped.active.length} active / ${grouped.completed.length} completed`;
+  }
+
+  renderPortfolioList(portfolioPlannedList, grouped.planned, "Nothing planned yet.");
+  renderPortfolioList(portfolioActiveList, grouped.active, "No active projects or competitions.");
+  renderPortfolioList(portfolioCompletedList, grouped.completed, "No completed portfolio items yet.");
+}
+
+function renderPortfolioYearFilter(items) {
+  if (!portfolioYearFilter) {
+    return;
+  }
+  const years = portfolioYearsForItems(items);
+  if (state.portfolioYear !== "all" && !years.includes(state.portfolioYear)) {
+    state.portfolioYear = "all";
+  }
+  const currentOptions = [...portfolioYearFilter.options].map((option) => option.value).join("|");
+  const nextOptions = ["all", ...years].join("|");
+  if (currentOptions !== nextOptions) {
+    portfolioYearFilter.innerHTML = "";
+    const all = document.createElement("option");
+    all.value = "all";
+    all.textContent = "All years";
+    portfolioYearFilter.appendChild(all);
+    years.forEach((year) => {
+      const option = document.createElement("option");
+      option.value = year;
+      option.textContent = year;
+      portfolioYearFilter.appendChild(option);
+    });
+  }
+  portfolioYearFilter.value = state.portfolioYear;
+}
+
+function renderPortfolioList(target, items, emptyText) {
+  target.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "portfolio-empty";
+    empty.textContent = emptyText;
+    target.appendChild(empty);
+    return;
+  }
+  items.forEach((item) => {
+    target.appendChild(renderPortfolioCard(item));
+  });
+}
+
+function renderPortfolioCard(item) {
+  const fragment = portfolioItemTemplate.content.cloneNode(true);
+  const card = fragment.querySelector(".portfolio-card");
+  const type = fragment.querySelector(".portfolio-card__type");
+  const dates = fragment.querySelector(".portfolio-card__dates");
+  const title = fragment.querySelector(".portfolio-card__title");
+  const meta = fragment.querySelector(".portfolio-card__meta");
+  const achievement = fragment.querySelector(".portfolio-card__achievement");
+  const viewButton = fragment.querySelector(".portfolio-card__view");
+
+  card.dataset.id = item.id;
+  card.draggable = true;
+  card.classList.add(`portfolio-card--${item.type}`);
+  type.textContent = item.type === "competition" ? "Competition" : "Project";
+  dates.textContent = portfolioDateRange(item);
+  title.textContent = item.title || "Untitled";
+  meta.hidden = true;
+  achievement.textContent = item.achievement ? `Achievement: ${item.achievement}` : "";
+  achievement.hidden = !item.achievement;
+
+  card.addEventListener("click", (event) => {
+    if (event.target.closest("button") || event.target.closest("a")) {
+      return;
+    }
+    openPortfolioDetail(item.id);
+  });
+
+  card.addEventListener("dragstart", (event) => {
+    dragPortfolioItemId = item.id;
+    card.classList.add("is-dragging");
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", item.id);
+    }
+  });
+
+  card.addEventListener("dragend", () => {
+    dragPortfolioItemId = "";
+    card.classList.remove("is-dragging");
+    document.querySelectorAll(".portfolio-section").forEach((section) => section.classList.remove("is-drop-target"));
+  });
+
+  viewButton.addEventListener("click", () => openPortfolioDetail(item.id));
+
+  return fragment;
+}
+
+function portfolioDateRange(item) {
+  const start = item.startDate ? SHORT_DATE_FORMATTER.format(new Date(`${item.startDate}T00:00:00`)) : "";
+  const end = item.endDate ? SHORT_DATE_FORMATTER.format(new Date(`${item.endDate}T00:00:00`)) : "";
+  if (start && end) {
+    return `${start} - ${end}`;
+  }
+  return start || end || "No dates";
+}
+
+function currentPortfolioDetailItem() {
+  return state.portfolioDetailItemId
+    ? state.portfolioItems.find((item) => item.id === state.portfolioDetailItemId) || null
+    : null;
+}
+
+function openPortfolioDetail(itemId) {
+  const item = state.portfolioItems.find((entry) => entry.id === itemId);
+  if (!item) {
+    return;
+  }
+  state.portfolioDetailItemId = item.id;
+  renderPortfolioDetail();
+}
+
+function closePortfolioDetail() {
+  state.portfolioDetailItemId = "";
+  renderPortfolioDetail();
+}
+
+function renderPortfolioDetail() {
+  const item = currentPortfolioDetailItem();
+  const isOpen = Boolean(item);
+  portfolioDetailOverlay.classList.toggle("task-detail-overlay--hidden", !isOpen);
+  portfolioDetailOverlay.setAttribute("aria-hidden", String(!isOpen));
+  portfolioDetailPanel.classList.toggle("task-detail--hidden", !isOpen);
+  portfolioDetailPanel.setAttribute("aria-hidden", String(!isOpen));
+  if (!item) {
+    return;
+  }
+
+  portfolioDetailType.textContent = item.type === "competition" ? "Competition" : "Project";
+  portfolioDetailTitle.textContent = item.title || "Portfolio item";
+  portfolioDetailMeta.textContent = item.organization || "Portfolio record";
+  portfolioDetailStatus.textContent = portfolioStatusLabel(item.status);
+  portfolioDetailDates.textContent = portfolioDateRange(item);
+  portfolioDetailRole.textContent = item.role || "-";
+  portfolioDetailTeammates.textContent = item.teammates || "-";
+
+  portfolioDetailAchievement.textContent = item.achievement || "";
+  portfolioDetailAchievementBlock.hidden = !item.achievement;
+  renderPortfolioLinks(portfolioDetailLinks, item.links);
+  portfolioDetailLinksBlock.hidden = !String(item.links || "").trim();
+  portfolioDetailNotes.textContent = item.notes || "";
+  portfolioDetailNotesBlock.hidden = !item.notes;
+}
+
+function renderPortfolioLinks(target, rawLinks) {
+  target.innerHTML = "";
+  const links = String(rawLinks || "")
+    .split(/[\n,]+/)
+    .map((link) => link.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  links.forEach((link, index) => {
+    const anchor = document.createElement("a");
+    anchor.href = link.startsWith("http://") || link.startsWith("https://") ? link : `https://${link}`;
+    anchor.target = "_blank";
+    anchor.rel = "noreferrer";
+    anchor.textContent = index === 0 ? "Link" : `Link ${index + 1}`;
+    target.appendChild(anchor);
+  });
+}
+
+function portfolioStatusLabel(status) {
+  return {
+    planned: "Planned",
+    active: "Active",
+    completed: "Completed",
+  }[status] || "Active";
+}
+
 function renderPlans() {
   const plans = plansForDate(state.selectedDate);
   planList.innerHTML = "";
@@ -1298,18 +1722,8 @@ function renderPlans() {
     fragment.querySelector(".plan-item__edit").addEventListener("click", () => {
       openPlanEditor(plan);
     });
-    fragment.querySelector(".plan-item__delete").addEventListener("click", async () => {
-      try {
-        setStatus("Deleting plan...");
-        await api(`/plans/${plan.id}`, { method: "DELETE" });
-        state.plans = state.plans.filter((entry) => entry.id !== plan.id);
-        state.lastSyncedAt = Date.now();
-        renderSidebar();
-        renderPlans();
-        setStatus("Plan deleted.");
-      } catch (error) {
-        setStatus(error.message, true);
-      }
+    fragment.querySelector(".plan-item__delete").addEventListener("click", () => {
+      queuePlanDeleteUndo(plan.id);
     });
     planList.appendChild(fragment);
   });
@@ -1882,6 +2296,91 @@ function upsertPlan(nextPlan) {
     : [...state.plans, nextPlan];
 }
 
+function upsertPortfolioItem(nextItem) {
+  const hydrated = hydratePortfolioItemFromServer(nextItem);
+  if (!hydrated || !hydrated.id) {
+    return;
+  }
+  const exists = state.portfolioItems.some((item) => item.id === hydrated.id);
+  state.portfolioItems = sortPortfolioItems(
+    exists
+      ? state.portfolioItems.map((item) => (item.id === hydrated.id ? hydrated : item))
+      : [...state.portfolioItems, hydrated]
+  );
+}
+
+function hydratePortfolioItemFromServer(item) {
+  if (!item) {
+    return null;
+  }
+  return {
+    id: String(item.id || ""),
+    type: item.type === "competition" ? "competition" : "project",
+    title: String(item.title || ""),
+    organization: String(item.organization || ""),
+    role: String(item.role || ""),
+    teammates: String(item.teammates || ""),
+    startDate: item.startDate || null,
+    endDate: item.endDate || null,
+    status: ["planned", "active", "completed"].includes(item.status) ? item.status : "active",
+    achievement: String(item.achievement || ""),
+    links: String(item.links || ""),
+    notes: String(item.notes || ""),
+    createdAt: String(item.createdAt || ""),
+    updatedAt: String(item.updatedAt || ""),
+  };
+}
+
+function sortPortfolioItems(items) {
+  if (PORTFOLIO_UTILS.sortItems) {
+    return PORTFOLIO_UTILS.sortItems(items);
+  }
+  const rank = { planned: 0, active: 1, completed: 2 };
+  return [...items].filter(Boolean).sort((left, right) =>
+    (rank[left.status] ?? 9) - (rank[right.status] ?? 9) ||
+    String(right.startDate || "0000-00-00").localeCompare(String(left.startDate || "0000-00-00")) ||
+    compareCreatedDesc(left, right)
+  );
+}
+
+function filterPortfolioItems(items) {
+  if (PORTFOLIO_UTILS.filterItems) {
+    return PORTFOLIO_UTILS.filterItems(items, {
+      type: state.portfolioFilter,
+      year: state.portfolioYear,
+      search: state.portfolioSearch,
+    });
+  }
+  const search = String(state.portfolioSearch || "").toLowerCase();
+  return sortPortfolioItems(items).filter((item) =>
+    (state.portfolioFilter === "all" || item.type === state.portfolioFilter) &&
+    (state.portfolioYear === "all" || String(item.endDate || item.startDate || item.createdAt || "").startsWith(state.portfolioYear)) &&
+    (!search || [item.title, item.organization, item.role, item.teammates, item.achievement, item.links, item.notes]
+      .some((value) => String(value || "").toLowerCase().includes(search)))
+  );
+}
+
+function groupPortfolioItems(items) {
+  if (PORTFOLIO_UTILS.groupByStatus) {
+    return PORTFOLIO_UTILS.groupByStatus(items);
+  }
+  return {
+    active: (items || []).filter((item) => item.status === "active"),
+    planned: (items || []).filter((item) => item.status === "planned"),
+    completed: (items || []).filter((item) => item.status === "completed"),
+  };
+}
+
+function portfolioYearsForItems(items) {
+  if (PORTFOLIO_UTILS.yearsForItems) {
+    return PORTFOLIO_UTILS.yearsForItems(items);
+  }
+  return [...new Set((items || [])
+    .map((item) => String(item.endDate || item.startDate || item.createdAt || "").slice(0, 4))
+    .filter(Boolean))]
+    .sort((left, right) => right.localeCompare(left));
+}
+
 function currentTaskDone(id) {
   return Boolean(state.todos.find((todo) => todo.id === id)?.done);
 }
@@ -2191,6 +2690,57 @@ function queueClearCompletedUndo(completed) {
   });
 }
 
+function queuePlanDeleteUndo(planId) {
+  const plan = state.plans.find((entry) => entry.id === planId);
+  if (!plan) {
+    return;
+  }
+  const previousPlans = state.plans.map((entry) => ({ ...entry }));
+  state.plans = state.plans.filter((entry) => entry.id !== planId);
+  render();
+  setUndoAction({
+    label: "Plan deleted",
+    rollback: () => {
+      state.plans = previousPlans;
+      render();
+      setStatus("Delete undone.");
+    },
+    commit: async () => {
+      await api(`/plans/${planId}`, { method: "DELETE" });
+      state.lastSyncedAt = Date.now();
+      render();
+      setStatus("Plan deleted.");
+    },
+  });
+}
+
+function queuePortfolioDeleteUndo(itemId) {
+  const item = state.portfolioItems.find((entry) => entry.id === itemId);
+  if (!item) {
+    return;
+  }
+  const previousItems = state.portfolioItems.map((entry) => ({ ...entry }));
+  state.portfolioItems = state.portfolioItems.filter((entry) => entry.id !== itemId);
+  if (state.portfolioDetailItemId === itemId) {
+    state.portfolioDetailItemId = "";
+  }
+  render();
+  setUndoAction({
+    label: "Portfolio item deleted",
+    rollback: () => {
+      state.portfolioItems = previousItems;
+      render();
+      setStatus("Delete undone.");
+    },
+    commit: async () => {
+      await api(`/portfolio/${itemId}`, { method: "DELETE" });
+      state.lastSyncedAt = Date.now();
+      render();
+      setStatus("Portfolio item deleted.");
+    },
+  });
+}
+
 async function toggleTodoDone(todoId, nextDone) {
   const todo = state.todos.find((entry) => entry.id === todoId);
   if (!todo) {
@@ -2281,6 +2831,8 @@ async function deleteTodo(todoId) {
 }
 
 function openTaskEditor(todo) {
+  composerOverlay.dataset.locked = "true";
+  composerOverlay.dataset.lockedTab = "task";
   taskEditorId.value = todo.id;
   setComposerTab("task");
   todoTitleInput.value = todo.title;
@@ -2290,6 +2842,9 @@ function openTaskEditor(todo) {
   todoDueDateInput.value = todo.dueDate || "";
   todoDailyInput.checked = Boolean(todo.daily);
   taskSubmitButton.textContent = "Save Task";
+  composerEyebrow.textContent = "Edit";
+  composerTitle.textContent = "Edit Task";
+  composerHint.textContent = "Update this task without changing the current view.";
   composerOverlay.classList.remove("composer-overlay--hidden");
   focusComposerField("task");
 }
@@ -2321,6 +2876,8 @@ function syncComposerNote() {
 }
 
 function openPlanEditor(plan) {
+  composerOverlay.dataset.locked = "true";
+  composerOverlay.dataset.lockedTab = "plan";
   planEditorId.value = plan.id;
   setComposerTab("plan");
   planDateInput.value = plan.planDate;
@@ -2330,8 +2887,81 @@ function openPlanEditor(plan) {
   planTitleInput.value = plan.title;
   planDetailsInput.value = plan.details || "";
   planSubmitButton.textContent = "Save Plan";
+  composerEyebrow.textContent = "Edit";
+  composerTitle.textContent = "Edit Plan";
+  composerHint.textContent = "Update this scheduled item for the selected day.";
   composerOverlay.classList.remove("composer-overlay--hidden");
   focusComposerField("plan");
+}
+
+function openPortfolioEditor(item) {
+  composerOverlay.dataset.locked = "true";
+  composerOverlay.dataset.lockedTab = "portfolio";
+  portfolioEditorId.value = item.id;
+  setComposerTab("portfolio");
+  portfolioTypeInput.value = item.type || "project";
+  portfolioStatusInput.value = item.status || "active";
+  portfolioTitleInput.value = item.title || "";
+  portfolioOrganizationInput.value = item.organization || "";
+  portfolioRoleInput.value = item.role || "";
+  portfolioStartDateInput.value = item.startDate || "";
+  portfolioEndDateInput.value = item.endDate || "";
+  portfolioTeammatesInput.value = item.teammates || "";
+  portfolioAchievementInput.value = item.achievement || "";
+  portfolioLinksInput.value = item.links || "";
+  portfolioNotesInput.value = item.notes || "";
+  portfolioMoreDetails.open = Boolean(item.organization || item.role || item.teammates || item.links || item.notes);
+  portfolioSubmitButton.textContent = "Save Portfolio Item";
+  composerEyebrow.textContent = "Edit";
+  composerTitle.textContent = "Edit Portfolio";
+  composerHint.textContent = "Update this project or competition record.";
+  composerOverlay.classList.remove("composer-overlay--hidden");
+  focusComposerField("portfolio");
+}
+
+async function movePortfolioItemToStatus(itemId, targetStatus) {
+  if (!["planned", "active", "completed"].includes(targetStatus)) {
+    return;
+  }
+  const item = state.portfolioItems.find((entry) => entry.id === itemId);
+  if (!item || item.status === targetStatus) {
+    return;
+  }
+  const previous = { ...item };
+  const nextItem = { ...item, status: targetStatus };
+  try {
+    setStatus("Updating portfolio item...");
+    upsertPortfolioItem(nextItem);
+    renderPortfolio();
+    const payload = await api(`/portfolio/${itemId}`, {
+      method: "PUT",
+      body: serializePortfolioItemForApi(nextItem),
+    });
+    upsertPortfolioItem(payload.portfolioItem);
+    state.lastSyncedAt = Date.now();
+    render();
+    setStatus("Portfolio item moved.");
+  } catch (error) {
+    upsertPortfolioItem(previous);
+    render();
+    setStatus(error.message, true);
+  }
+}
+
+function serializePortfolioItemForApi(item) {
+  return {
+    type: item.type || "project",
+    title: item.title || "",
+    organization: item.organization || "",
+    role: item.role || "",
+    teammates: item.teammates || "",
+    startDate: item.startDate || null,
+    endDate: item.endDate || null,
+    status: item.status || "active",
+    achievement: item.achievement || "",
+    links: item.links || "",
+    notes: item.notes || "",
+  };
 }
 
 function updateFilterButtons() {
@@ -2348,6 +2978,10 @@ function focusComposerField(tab) {
     }
     if (tab === "note") {
       dailyNoteInput.focus();
+      return;
+    }
+    if (tab === "portfolio") {
+      portfolioTitleInput.focus();
       return;
     }
     planTitleInput.focus();
@@ -2641,19 +3275,19 @@ async function enableNotifications() {
     return;
   }
   if (Notification.permission === "granted") {
-    setStatus("Notifications are already enabled.");
+    setStatus("In-app alerts are already enabled.");
     render();
     scanNotifications();
     return;
   }
   const permission = await Notification.requestPermission();
   if (permission === "granted") {
-    setStatus("Notifications enabled.");
+    setStatus("In-app alerts enabled.");
     render();
     scanNotifications();
     return;
   }
-  setStatus("Notification permission was not granted.", true);
+  setStatus("In-app alert permission was not granted.", true);
   render();
 }
 
@@ -2664,7 +3298,7 @@ function updateNotificationButton() {
     return;
   }
   notificationButton.disabled = false;
-  notificationButton.textContent = Notification.permission === "granted" ? "Alerts Enabled" : "Enable Alerts";
+  notificationButton.textContent = Notification.permission === "granted" ? "In-app Alerts On" : "Enable In-app Alerts";
 }
 
 function scanNotifications() {
