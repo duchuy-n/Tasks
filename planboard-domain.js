@@ -33,6 +33,27 @@
     };
   }
 
+  function shouldResetDailyStreak(todo, now = new Date()) {
+    if (!todo || !todo.daily || Number(todo.streak || 0) <= 0) {
+      return false;
+    }
+    const today = vietnamTodayIso(now);
+    const yesterday = previousIsoDate(today);
+    return todo.dailyCompletedOn !== today && todo.dailyCompletedOn !== yesterday;
+  }
+
+  function resetMissedDailyStreak(todo, now = new Date()) {
+    if (!shouldResetDailyStreak(todo, now)) {
+      return todo;
+    }
+    return {
+      ...todo,
+      done: false,
+      lane: "today",
+      streak: 0,
+    };
+  }
+
   function weekStart(date) {
     const next = new Date(date);
     const day = next.getDay() || 7;
@@ -94,6 +115,8 @@
     previousIsoDate,
     isDailyCompletedToday,
     completeDailyTodo,
+    shouldResetDailyStreak,
+    resetMissedDailyStreak,
     isSameWeek,
     inferStartingLane,
     deadlineTodosByDate,

@@ -52,6 +52,38 @@ test("daily completion resets streak after a skipped day", () => {
   assert.equal(completed.streak, 1);
 });
 
+test("missed daily task resets visible streak after the next reset day", () => {
+  const missed = domain.resetMissedDailyStreak(
+    {
+      id: "daily-3",
+      done: false,
+      lane: "today",
+      daily: true,
+      dailyCompletedOn: "2026-05-18",
+      streak: 5,
+    },
+    new Date("2026-05-20T02:00:00Z")
+  );
+
+  assert.equal(missed.streak, 0);
+  assert.equal(missed.dailyCompletedOn, "2026-05-18");
+  assert.equal(missed.done, false);
+  assert.equal(missed.lane, "today");
+});
+
+test("daily task keeps streak during the day after completion", () => {
+  const current = {
+    id: "daily-4",
+    done: false,
+    lane: "today",
+    daily: true,
+    dailyCompletedOn: "2026-05-01",
+    streak: 4,
+  };
+
+  assert.equal(domain.resetMissedDailyStreak(current, new Date("2026-05-02T02:00:00Z")), current);
+});
+
 test("starting lane inference honors daily, explicit lane, and due dates", () => {
   assert.equal(domain.inferStartingLane("", null, true, "2026-05-02"), "today");
   assert.equal(domain.inferStartingLane("week", "2026-06-20", false, "2026-05-02"), "week");

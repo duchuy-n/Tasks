@@ -150,6 +150,7 @@ let statusTimerId = 0;
 let detailSaveTimerId = 0;
 let syncLabelTimerId = 0;
 let undoTimerId = 0;
+const dailyStreakResetIds = new Set();
 
 const state = {
   token: localStorage.getItem(TOKEN_KEY) || "",
@@ -821,6 +822,7 @@ function clearSession(silent = false) {
   state.detailSaving = false;
   state.taskActionTaskId = "";
   state.lastSyncedAt = 0;
+  dailyStreakResetIds.clear();
   localStorage.removeItem(TOKEN_KEY);
   saveNotifiedState();
   stopAutoSync();
@@ -848,7 +850,13 @@ function applyBootstrap(payload) {
   state.user = payload.user || null;
   state.notesByDate = Object.fromEntries((payload.notes || []).map((note) => [note.noteDate, note.content]));
   state.plans = payload.plans || [];
-  state.todos = (payload.todos || []).map(hydrateTodoFromServer);
+  const hydratedTodos = (payload.todos || []).map(hydrateTodoFromServer);
+  const resetTodos = hydratedTodos.map((todo) =>
+    state.detailDirty && state.detailTaskId === todo.id ? todo : resetMissedDailyStreak(todo)
+  );
+  const missedDailyResets = resetTodos.filter((todo, index) => todo !== hydratedTodos[index]);
+  state.todos = resetTodos;
+  persistMissedDailyStreaks(missedDailyResets);
   if (state.todos.length && filteredTodos().length === 0 && state.filterMode !== "all") {
     state.filterMode = "all";
     saveUiState();
@@ -1715,6 +1723,53 @@ function serializeTodoForApi(todo) {
     dailyCompletedOn: todo.dailyCompletedOn || null,
     streak: Number.isFinite(Number(todo.streak)) ? Number(todo.streak) : 0,
   };
+}
+
+function resetMissedDailyStreak(todo) {
+  if (PLANBOARD_DOMAIN.resetMissedDailyStreak) {
+    return PLANBOARD_DOMAIN.resetMissedDailyStreak(todo);
+  }
+  if (!todo || !todo.daily || Number(todo.streak || 0) <= 0) {
+    return todo;
+  }
+  const today = todayIso();
+  const yesterday = previousIsoDate(today);
+  if (todo.dailyCompletedOn === today || todo.dailyCompletedOn === yesterday) {
+    return todo;
+  }
+  return {
+    ...todo,
+    done: false,
+    lane: "today",
+    streak: 0,
+  };
+}
+
+async function persistMissedDailyStreaks(todos) {
+  if (!state.token || !Array.isArray(todos) || !todos.length) {
+    return;
+  }
+  const pending = todos.filter((todo) => todo && todo.id && !dailyStreakResetIds.has(todo.id));
+  if (!pending.length) {
+    return;
+  }
+  pending.forEach((todo) => dailyStreakResetIds.add(todo.id));
+  try {
+    const results = await Promise.allSettled(
+      pending.map((todo) =>
+        api(`/todos/${todo.id}`, {
+          method: "PUT",
+          body: serializeTodoForApi(todo),
+        })
+      )
+    );
+    if (results.every((result) => result.status === "fulfilled")) {
+      state.lastSyncedAt = Date.now();
+      renderSyncMeta();
+    }
+  } finally {
+    pending.forEach((todo) => dailyStreakResetIds.delete(todo.id));
+  }
 }
 
 function inferLegacyLane(todo) {
