@@ -11,7 +11,7 @@ service cloud.firestore {
 
     function isDate(value) {
       return value is string
-        && value.matches('^\\d{4}-((01|03|05|07|08|10|12)-(0[1-9]|[12][0-9]|3[01])|(04|06|09|11)-(0[1-9]|[12][0-9]|30)|02-(0[1-9]|1[0-9]|2[0-9]))$');
+        && value.matches('^([1-9]\\d{3}-((01|03|05|07|08|10|12)-(0[1-9]|[12][0-9]|3[01])|(04|06|09|11)-(0[1-9]|[12][0-9]|30)|02-(0[1-9]|1[0-9]|2[0-8]))|([1-9]\\d(0[48]|[2468][048]|[13579][26])|[2468][048]00|[13579][26]00)-02-29)$');
     }
 
     function isOptionalDate(value) {
@@ -68,9 +68,9 @@ service cloud.firestore {
     }
 
     function validPortfolioItem(itemId) {
-      return request.resource.data.keys().hasOnly(['id', 'type', 'title', 'organization', 'role', 'teammates', 'startDate', 'endDate', 'status', 'achievement', 'links', 'notes', 'createdAt', 'updatedAt'])
+      return request.resource.data.keys().hasOnly(['id', 'type', 'title', 'organization', 'role', 'teammates', 'startDate', 'endDate', 'status', 'statusMode', 'cert', 'achievement', 'links', 'notes', 'createdAt', 'updatedAt'])
         && request.resource.data.id == itemId
-        && request.resource.data.type in ['project', 'competition']
+        && request.resource.data.type in ['project', 'competition', 'course']
         && request.resource.data.title is string
         && request.resource.data.title.size() >= 2
         && request.resource.data.title.size() <= 160
@@ -84,6 +84,8 @@ service cloud.firestore {
         && isOptionalDate(request.resource.data.endDate)
         && (request.resource.data.startDate == null || request.resource.data.endDate == null || request.resource.data.endDate >= request.resource.data.startDate)
         && request.resource.data.status in ['planned', 'active', 'completed']
+        && (!('statusMode' in request.resource.data) || request.resource.data.statusMode in ['auto', 'manual'])
+        && (!('cert' in request.resource.data) || request.resource.data.cert is bool)
         && request.resource.data.achievement is string
         && request.resource.data.achievement.size() <= 1000
         && request.resource.data.links is string

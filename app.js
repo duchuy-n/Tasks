@@ -87,6 +87,7 @@ const portfolioPlannedList = document.querySelector("#portfolioPlannedList");
 const portfolioCompletedList = document.querySelector("#portfolioCompletedList");
 const portfolioFilterButtons = [...document.querySelectorAll("[data-portfolio-filter]")];
 const portfolioYearFilter = document.querySelector("#portfolioYearFilter");
+const portfolioCertFilter = document.querySelector("#portfolioCertFilter");
 const portfolioSearchInput = document.querySelector("#portfolioSearchInput");
 const todoLaneInput = document.querySelector("#todoLaneInput");
 const todoPriorityInput = document.querySelector("#todoPriorityInput");
@@ -104,6 +105,7 @@ const portfolioRoleInput = document.querySelector("#portfolioRoleInput");
 const portfolioStartDateInput = document.querySelector("#portfolioStartDateInput");
 const portfolioEndDateInput = document.querySelector("#portfolioEndDateInput");
 const portfolioTeammatesInput = document.querySelector("#portfolioTeammatesInput");
+const portfolioCertInput = document.querySelector("#portfolioCertInput");
 const portfolioAchievementInput = document.querySelector("#portfolioAchievementInput");
 const portfolioLinksInput = document.querySelector("#portfolioLinksInput");
 const portfolioNotesInput = document.querySelector("#portfolioNotesInput");
@@ -156,6 +158,7 @@ const portfolioDetailStatus = document.querySelector("#portfolioDetailStatus");
 const portfolioDetailDates = document.querySelector("#portfolioDetailDates");
 const portfolioDetailRole = document.querySelector("#portfolioDetailRole");
 const portfolioDetailTeammates = document.querySelector("#portfolioDetailTeammates");
+const portfolioDetailCert = document.querySelector("#portfolioDetailCert");
 const portfolioDetailAchievementBlock = document.querySelector("#portfolioDetailAchievementBlock");
 const portfolioDetailAchievement = document.querySelector("#portfolioDetailAchievement");
 const portfolioDetailLinksBlock = document.querySelector("#portfolioDetailLinksBlock");
@@ -209,6 +212,7 @@ const state = {
   activeView: loadUiState().activeView,
   portfolioFilter: loadUiState().portfolioFilter,
   portfolioYear: loadUiState().portfolioYear,
+  portfolioCert: loadUiState().portfolioCert,
   portfolioSearch: loadUiState().portfolioSearch,
   mobileView: loadUiState().mobileView,
   sortMode: loadUiState().sortMode,
@@ -243,6 +247,7 @@ function loadUiState() {
     activeView: "board",
     portfolioFilter: "all",
     portfolioYear: "all",
+    portfolioCert: "all",
     portfolioSearch: "",
     filterMode: "all",
     mobileView: "today",
@@ -254,8 +259,11 @@ function loadUiState() {
     const activeView = parsed && ["board", "calendar", "portfolio"].includes(parsed.activeView)
       ? parsed.activeView
       : "board";
-    const portfolioFilter = parsed && ["all", "project", "competition"].includes(parsed.portfolioFilter)
+    const portfolioFilter = parsed && ["all", "project", "competition", "course"].includes(parsed.portfolioFilter)
       ? parsed.portfolioFilter
+      : "all";
+    const portfolioCert = parsed && ["all", "cert", "no-cert"].includes(parsed.portfolioCert)
+      ? parsed.portfolioCert
       : "all";
     return {
       ...defaults,
@@ -263,6 +271,7 @@ function loadUiState() {
       activeView,
       portfolioFilter,
       portfolioYear: String((parsed && parsed.portfolioYear) || "all"),
+      portfolioCert,
       portfolioSearch: String((parsed && parsed.portfolioSearch) || ""),
       selectedDate: normalizeIsoDateInput(parsed && parsed.selectedDate) || defaults.selectedDate,
     };
@@ -279,6 +288,7 @@ function saveUiState() {
       activeView: state.activeView,
       portfolioFilter: state.portfolioFilter,
       portfolioYear: state.portfolioYear,
+      portfolioCert: state.portfolioCert,
       portfolioSearch: state.portfolioSearch,
       filterMode: state.filterMode,
       mobileView: state.mobileView,
@@ -317,6 +327,11 @@ function bindEvents() {
   });
   portfolioYearFilter?.addEventListener("change", () => {
     state.portfolioYear = portfolioYearFilter.value || "all";
+    saveUiState();
+    renderPortfolio();
+  });
+  portfolioCertFilter?.addEventListener("change", () => {
+    state.portfolioCert = portfolioCertFilter.value || "all";
     saveUiState();
     renderPortfolio();
   });
@@ -650,6 +665,10 @@ function bindEvents() {
     const formData = new FormData(form);
     try {
       const editingId = portfolioEditorId.value;
+      const startDate = normalizeIsoDateInput(String(formData.get("startDate") || "").trim()) || null;
+      const endDate = normalizeIsoDateInput(String(formData.get("endDate") || "").trim()) || null;
+      const requestedStatus = String(formData.get("status") || "auto");
+      const statusMode = requestedStatus === "auto" ? "auto" : "manual";
       setStatus(editingId ? "Updating portfolio item..." : "Adding portfolio item...");
       const payload = await api(editingId ? `/portfolio/${editingId}` : "/portfolio", {
         method: editingId ? "PUT" : "POST",
@@ -659,9 +678,11 @@ function bindEvents() {
           organization: String(formData.get("organization") || "").trim(),
           role: String(formData.get("role") || "").trim(),
           teammates: String(formData.get("teammates") || "").trim(),
-          startDate: normalizeIsoDateInput(String(formData.get("startDate") || "").trim()) || null,
-          endDate: normalizeIsoDateInput(String(formData.get("endDate") || "").trim()) || null,
-          status: String(formData.get("status") || "active"),
+          startDate,
+          endDate,
+          status: statusMode === "auto" ? inferPortfolioStatus(startDate, endDate) : requestedStatus,
+          statusMode,
+          cert: formData.get("cert") === "on",
           achievement: String(formData.get("achievement") || "").trim(),
           links: String(formData.get("links") || "").trim(),
           notes: String(formData.get("notes") || "").trim(),
@@ -955,7 +976,7 @@ function setComposerTab(tab) {
       ? "Save a short note for the selected day."
       : tab === "plan"
         ? "Add a scheduled item for the selected day."
-        : "Capture a project or competition for your long-term record.";
+        : "Capture a project, competition, or course for your long-term record.";
 }
 
 function composerTabForActiveView() {
@@ -1519,6 +1540,9 @@ function renderPortfolio() {
   if (portfolioSearchInput && portfolioSearchInput.value !== state.portfolioSearch) {
     portfolioSearchInput.value = state.portfolioSearch;
   }
+  if (portfolioCertFilter && portfolioCertFilter.value !== state.portfolioCert) {
+    portfolioCertFilter.value = state.portfolioCert;
+  }
   const items = filterPortfolioItems(allItems);
   const grouped = groupPortfolioItems(items);
   portfolioFilterButtons.forEach((button) => {
@@ -1531,7 +1555,7 @@ function renderPortfolio() {
   }
 
   renderPortfolioList(portfolioPlannedList, grouped.planned, "Nothing planned yet.");
-  renderPortfolioList(portfolioActiveList, grouped.active, "No active projects or competitions.");
+  renderPortfolioList(portfolioActiveList, grouped.active, "No active portfolio items.");
   renderPortfolioList(portfolioCompletedList, grouped.completed, "No completed portfolio items yet.");
 }
 
@@ -1580,6 +1604,7 @@ function renderPortfolioCard(item) {
   const card = fragment.querySelector(".portfolio-card");
   const type = fragment.querySelector(".portfolio-card__type");
   const dates = fragment.querySelector(".portfolio-card__dates");
+  const cert = fragment.querySelector(".portfolio-card__cert");
   const title = fragment.querySelector(".portfolio-card__title");
   const meta = fragment.querySelector(".portfolio-card__meta");
   const achievement = fragment.querySelector(".portfolio-card__achievement");
@@ -1588,8 +1613,9 @@ function renderPortfolioCard(item) {
   card.dataset.id = item.id;
   card.draggable = true;
   card.classList.add(`portfolio-card--${item.type}`);
-  type.textContent = item.type === "competition" ? "Competition" : "Project";
+  type.textContent = portfolioTypeLabel(item.type);
   dates.textContent = portfolioDateRange(item);
+  cert.hidden = !item.cert;
   title.textContent = item.title || "Untitled";
   meta.hidden = true;
   achievement.textContent = item.achievement ? `Achievement: ${item.achievement}` : "";
@@ -1662,13 +1688,17 @@ function renderPortfolioDetail() {
     return;
   }
 
-  portfolioDetailType.textContent = item.type === "competition" ? "Competition" : "Project";
+  portfolioDetailType.textContent = portfolioTypeLabel(item.type);
   portfolioDetailTitle.textContent = item.title || "Portfolio item";
   portfolioDetailMeta.textContent = item.organization || "Portfolio record";
-  portfolioDetailStatus.textContent = portfolioStatusLabel(item.status);
+  const effectiveStatus = portfolioEffectiveStatus(item);
+  portfolioDetailStatus.textContent = item.statusMode === "auto"
+    ? `${portfolioStatusLabel(effectiveStatus)} (Auto)`
+    : portfolioStatusLabel(item.status);
   portfolioDetailDates.textContent = portfolioDateRange(item);
   portfolioDetailRole.textContent = item.role || "-";
   portfolioDetailTeammates.textContent = item.teammates || "-";
+  portfolioDetailCert.textContent = item.cert ? "Yes" : "No";
 
   portfolioDetailAchievement.textContent = item.achievement || "";
   portfolioDetailAchievementBlock.hidden = !item.achievement;
@@ -1701,6 +1731,42 @@ function portfolioStatusLabel(status) {
     active: "Active",
     completed: "Completed",
   }[status] || "Active";
+}
+
+function inferPortfolioStatus(startDate, endDate, today = todayIso()) {
+  if (startDate && startDate > today) {
+    return "planned";
+  }
+  if (endDate && endDate < today) {
+    return "completed";
+  }
+  if (startDate || endDate) {
+    return "active";
+  }
+  return "planned";
+}
+
+function portfolioEffectiveStatus(item) {
+  if (item && item.statusMode === "auto") {
+    return inferPortfolioStatus(item.startDate, item.endDate);
+  }
+  return ["planned", "active", "completed"].includes(item && item.status) ? item.status : "active";
+}
+
+function withPortfolioEffectiveStatus(item) {
+  if (!item) {
+    return item;
+  }
+  const status = portfolioEffectiveStatus(item);
+  return status === item.status ? item : { ...item, status };
+}
+
+function portfolioTypeLabel(type) {
+  return {
+    competition: "Competition",
+    course: "Course",
+    project: "Project",
+  }[type] || "Project";
 }
 
 function renderPlans() {
@@ -2315,7 +2381,7 @@ function hydratePortfolioItemFromServer(item) {
   }
   return {
     id: String(item.id || ""),
-    type: item.type === "competition" ? "competition" : "project",
+    type: ["project", "competition", "course"].includes(item.type) ? item.type : "project",
     title: String(item.title || ""),
     organization: String(item.organization || ""),
     role: String(item.role || ""),
@@ -2323,6 +2389,8 @@ function hydratePortfolioItemFromServer(item) {
     startDate: item.startDate || null,
     endDate: item.endDate || null,
     status: ["planned", "active", "completed"].includes(item.status) ? item.status : "active",
+    statusMode: ["auto", "manual"].includes(item.statusMode) ? item.statusMode : "manual",
+    cert: Boolean(item.cert),
     achievement: String(item.achievement || ""),
     links: String(item.links || ""),
     notes: String(item.notes || ""),
@@ -2332,11 +2400,12 @@ function hydratePortfolioItemFromServer(item) {
 }
 
 function sortPortfolioItems(items) {
+  const normalized = [...(items || [])].filter(Boolean).map(withPortfolioEffectiveStatus);
   if (PORTFOLIO_UTILS.sortItems) {
-    return PORTFOLIO_UTILS.sortItems(items);
+    return PORTFOLIO_UTILS.sortItems(normalized);
   }
   const rank = { planned: 0, active: 1, completed: 2 };
-  return [...items].filter(Boolean).sort((left, right) =>
+  return normalized.sort((left, right) =>
     (rank[left.status] ?? 9) - (rank[right.status] ?? 9) ||
     String(right.startDate || "0000-00-00").localeCompare(String(left.startDate || "0000-00-00")) ||
     compareCreatedDesc(left, right)
@@ -2345,29 +2414,32 @@ function sortPortfolioItems(items) {
 
 function filterPortfolioItems(items) {
   if (PORTFOLIO_UTILS.filterItems) {
-    return PORTFOLIO_UTILS.filterItems(items, {
+    return sortPortfolioItems(PORTFOLIO_UTILS.filterItems(items, {
       type: state.portfolioFilter,
       year: state.portfolioYear,
+      cert: state.portfolioCert,
       search: state.portfolioSearch,
-    });
+    }));
   }
   const search = String(state.portfolioSearch || "").toLowerCase();
   return sortPortfolioItems(items).filter((item) =>
     (state.portfolioFilter === "all" || item.type === state.portfolioFilter) &&
     (state.portfolioYear === "all" || String(item.endDate || item.startDate || item.createdAt || "").startsWith(state.portfolioYear)) &&
-    (!search || [item.title, item.organization, item.role, item.teammates, item.achievement, item.links, item.notes]
+    (state.portfolioCert === "all" || (state.portfolioCert === "cert" ? Boolean(item.cert) : !item.cert)) &&
+    (!search || [item.title, item.organization, item.role, item.teammates, item.cert ? "cert certificate" : "", item.achievement, item.links, item.notes]
       .some((value) => String(value || "").toLowerCase().includes(search)))
   );
 }
 
 function groupPortfolioItems(items) {
+  const normalized = [...(items || [])].filter(Boolean).map(withPortfolioEffectiveStatus);
   if (PORTFOLIO_UTILS.groupByStatus) {
-    return PORTFOLIO_UTILS.groupByStatus(items);
+    return PORTFOLIO_UTILS.groupByStatus(normalized);
   }
   return {
-    active: (items || []).filter((item) => item.status === "active"),
-    planned: (items || []).filter((item) => item.status === "planned"),
-    completed: (items || []).filter((item) => item.status === "completed"),
+    active: normalized.filter((item) => item.status === "active"),
+    planned: normalized.filter((item) => item.status === "planned"),
+    completed: normalized.filter((item) => item.status === "completed"),
   };
 }
 
@@ -2900,13 +2972,14 @@ function openPortfolioEditor(item) {
   portfolioEditorId.value = item.id;
   setComposerTab("portfolio");
   portfolioTypeInput.value = item.type || "project";
-  portfolioStatusInput.value = item.status || "active";
+  portfolioStatusInput.value = item.statusMode === "auto" ? "auto" : item.status || "active";
   portfolioTitleInput.value = item.title || "";
   portfolioOrganizationInput.value = item.organization || "";
   portfolioRoleInput.value = item.role || "";
   portfolioStartDateInput.value = item.startDate || "";
   portfolioEndDateInput.value = item.endDate || "";
   portfolioTeammatesInput.value = item.teammates || "";
+  portfolioCertInput.checked = Boolean(item.cert);
   portfolioAchievementInput.value = item.achievement || "";
   portfolioLinksInput.value = item.links || "";
   portfolioNotesInput.value = item.notes || "";
@@ -2914,7 +2987,7 @@ function openPortfolioEditor(item) {
   portfolioSubmitButton.textContent = "Save Portfolio Item";
   composerEyebrow.textContent = "Edit";
   composerTitle.textContent = "Edit Portfolio";
-  composerHint.textContent = "Update this project or competition record.";
+  composerHint.textContent = "Update this portfolio record.";
   composerOverlay.classList.remove("composer-overlay--hidden");
   focusComposerField("portfolio");
 }
@@ -2924,11 +2997,11 @@ async function movePortfolioItemToStatus(itemId, targetStatus) {
     return;
   }
   const item = state.portfolioItems.find((entry) => entry.id === itemId);
-  if (!item || item.status === targetStatus) {
+  if (!item || portfolioEffectiveStatus(item) === targetStatus) {
     return;
   }
   const previous = { ...item };
-  const nextItem = { ...item, status: targetStatus };
+  const nextItem = { ...item, status: targetStatus, statusMode: "manual" };
   try {
     setStatus("Updating portfolio item...");
     upsertPortfolioItem(nextItem);
@@ -2950,7 +3023,7 @@ async function movePortfolioItemToStatus(itemId, targetStatus) {
 
 function serializePortfolioItemForApi(item) {
   return {
-    type: item.type || "project",
+    type: ["project", "competition", "course"].includes(item.type) ? item.type : "project",
     title: item.title || "",
     organization: item.organization || "",
     role: item.role || "",
@@ -2958,6 +3031,8 @@ function serializePortfolioItemForApi(item) {
     startDate: item.startDate || null,
     endDate: item.endDate || null,
     status: item.status || "active",
+    statusMode: item.statusMode === "auto" ? "auto" : "manual",
+    cert: Boolean(item.cert),
     achievement: item.achievement || "",
     links: item.links || "",
     notes: item.notes || "",

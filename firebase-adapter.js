@@ -3,8 +3,9 @@
   const FIREBASE_SDK_VERSION = config.FIREBASE_SDK_VERSION || "12.4.0";
   const LANE_SET = new Set(["ideas", "month", "week", "today", "done"]);
   const PRIORITY_SET = new Set(["low", "medium", "high"]);
-  const PORTFOLIO_TYPE_SET = new Set(["project", "competition"]);
+  const PORTFOLIO_TYPE_SET = new Set(["project", "competition", "course"]);
   const PORTFOLIO_STATUS_SET = new Set(["planned", "active", "completed"]);
+  const PORTFOLIO_STATUS_MODE_SET = new Set(["auto", "manual"]);
 
   let clientPromise = null;
   let authReadyPromise = null;
@@ -121,6 +122,23 @@
     return new Date().toISOString();
   }
 
+  function vietnamTodayIso(now = new Date()) {
+    return new Date(now.getTime() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  }
+
+  function inferPortfolioStatus(startDate, endDate, today = vietnamTodayIso()) {
+    if (startDate && startDate > today) {
+      return "planned";
+    }
+    if (endDate && endDate < today) {
+      return "completed";
+    }
+    if (startDate || endDate) {
+      return "active";
+    }
+    return "planned";
+  }
+
   function emailNormalize(value) {
     return String(value || "").trim().toLowerCase();
   }
@@ -216,13 +234,24 @@
     const teammates = String(body.teammates || "").trim();
     const startDate = body.startDate == null ? null : normalizeDateInput(body.startDate) || null;
     const endDate = body.endDate == null ? null : normalizeDateInput(body.endDate) || null;
-    const status = String(body.status || "active").trim().toLowerCase() || "active";
+    const requestedStatus = String(body.status || "active").trim().toLowerCase() || "active";
+    const statusMode = String(body.statusMode || (body.status === "auto" ? "auto" : "manual")).trim().toLowerCase() || "manual";
+    if (body.cert != null && typeof body.cert !== "boolean") {
+      throw createError("Certificate flag is invalid.", 400);
+    }
+    const cert = body.cert === true;
     const achievement = String(body.achievement || "").trim();
     const links = String(body.links || "").trim();
     const notes = String(body.notes || "").trim();
     if (!PORTFOLIO_TYPE_SET.has(type)) {
       throw createError("Portfolio type is invalid.", 400);
     }
+    if (!PORTFOLIO_STATUS_MODE_SET.has(statusMode)) {
+      throw createError("Portfolio status mode is invalid.", 400);
+    }
+    const status = statusMode === "auto"
+      ? inferPortfolioStatus(startDate, endDate)
+      : requestedStatus;
     if (!PORTFOLIO_STATUS_SET.has(status)) {
       throw createError("Portfolio status is invalid.", 400);
     }
@@ -268,6 +297,8 @@
       startDate,
       endDate,
       status,
+      statusMode,
+      cert,
       achievement,
       links,
       notes,
@@ -325,6 +356,8 @@
       startDate: data.startDate ? String(data.startDate) : null,
       endDate: data.endDate ? String(data.endDate) : null,
       status: String(data.status || "active"),
+      statusMode: data.statusMode === "auto" ? "auto" : "manual",
+      cert: Boolean(data.cert),
       achievement: String(data.achievement || ""),
       links: String(data.links || ""),
       notes: String(data.notes || ""),

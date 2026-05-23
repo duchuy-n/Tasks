@@ -1031,7 +1031,7 @@ textarea {
 
 .portfolio-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 118px minmax(160px, 240px);
+  grid-template-columns: minmax(0, 1fr) 118px 126px minmax(150px, 220px);
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
@@ -1134,11 +1134,19 @@ textarea {
   align-items: center;
 }
 
+.portfolio-card__badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
 .portfolio-card__top {
   justify-content: space-between;
 }
 
-.portfolio-card__type {
+.portfolio-card__type,
+.portfolio-card__cert {
   padding: 3px 8px;
   border-radius: 999px;
   background: var(--accent-soft);
@@ -1151,6 +1159,16 @@ textarea {
 .portfolio-card--competition .portfolio-card__type {
   background: rgba(243, 191, 74, 0.14);
   color: var(--yellow);
+}
+
+.portfolio-card--course .portfolio-card__type {
+  background: rgba(129, 140, 248, 0.14);
+  color: #a5b4fc;
+}
+
+.portfolio-card__cert {
+  background: rgba(72, 187, 120, 0.14);
+  color: var(--green);
 }
 
 .portfolio-card__dates,
@@ -2093,7 +2111,7 @@ textarea {
   }
 
   .portfolio-toolbar {
-    grid-template-columns: minmax(0, 1fr) 118px minmax(150px, 220px);
+    grid-template-columns: minmax(0, 1fr) 112px 118px minmax(140px, 200px);
   }
 
   .deadline-timeline {

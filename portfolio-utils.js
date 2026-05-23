@@ -1,6 +1,6 @@
 (function (root) {
   const STATUS_RANK = { planned: 0, active: 1, completed: 2 };
-  const VALID_FILTERS = ["all", "project", "competition"];
+  const VALID_FILTERS = ["all", "project", "competition", "course"];
 
   function compareCreatedDesc(left, right) {
     return String(right.createdAt || "").localeCompare(String(left.createdAt || ""));
@@ -34,6 +34,7 @@
       item.organization,
       item.role,
       item.teammates,
+      item.cert ? "cert certificate" : "",
       item.achievement,
       item.links,
       item.notes,
@@ -43,9 +44,11 @@
   function filterItems(items, options = {}) {
     const type = VALID_FILTERS.includes(options.type) ? options.type : "all";
     const year = String(options.year || "all");
+    const cert = ["all", "cert", "no-cert"].includes(options.cert) ? options.cert : "all";
     return sortItems(items).filter((item) =>
       (type === "all" || item.type === type) &&
       (year === "all" || yearForItem(item) === year) &&
+      (cert === "all" || (cert === "cert" ? Boolean(item.cert) : !item.cert)) &&
       matchesSearch(item, options.search)
     );
   }

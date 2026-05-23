@@ -177,14 +177,16 @@ class PlanboardServerTest(unittest.TestCase):
             "POST",
             "/api/portfolio",
             {
-                "type": "competition",
-                "title": "AI Challenge",
+                "type": "course",
+                "title": "Advanced AI Course",
                 "organization": "City Lab",
                 "role": "Team lead",
                 "teammates": "An, Binh",
-                "startDate": "2026-05-01",
-                "endDate": "2026-05-20",
-                "status": "completed",
+                "startDate": "2000-01-01",
+                "endDate": "2000-01-02",
+                "status": "active",
+                "statusMode": "auto",
+                "cert": True,
                 "achievement": "First prize",
                 "links": "https://example.com",
                 "notes": "Built the prototype and pitch deck.",
@@ -193,6 +195,10 @@ class PlanboardServerTest(unittest.TestCase):
         )
         self.assertEqual(status, HTTPStatus.CREATED)
         item_id = payload["portfolioItem"]["id"]
+        self.assertEqual(payload["portfolioItem"]["type"], "course")
+        self.assertEqual(payload["portfolioItem"]["status"], "completed")
+        self.assertEqual(payload["portfolioItem"]["statusMode"], "auto")
+        self.assertTrue(payload["portfolioItem"]["cert"])
         self.assertEqual(payload["portfolioItem"]["achievement"], "First prize")
 
         status, _, payload = self.request("GET", "/api/bootstrap", token=token)
@@ -209,9 +215,11 @@ class PlanboardServerTest(unittest.TestCase):
                 "organization": "City Lab",
                 "role": "Presenter",
                 "teammates": "An, Binh",
-                "startDate": "2026-05-01",
-                "endDate": "2026-05-20",
-                "status": "completed",
+                "startDate": "2000-01-01",
+                "endDate": "2000-01-02",
+                "status": "active",
+                "statusMode": "manual",
+                "cert": False,
                 "achievement": "First prize",
                 "links": "https://example.com",
                 "notes": "Final presentation owner.",
@@ -219,7 +227,11 @@ class PlanboardServerTest(unittest.TestCase):
             token=token,
         )
         self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["portfolioItem"]["type"], "competition")
+        self.assertEqual(payload["portfolioItem"]["status"], "active")
+        self.assertEqual(payload["portfolioItem"]["statusMode"], "manual")
         self.assertEqual(payload["portfolioItem"]["role"], "Presenter")
+        self.assertFalse(payload["portfolioItem"]["cert"])
 
         status, _, payload = self.request("DELETE", f"/api/portfolio/{item_id}", token=token)
         self.assertEqual(status, HTTPStatus.OK)

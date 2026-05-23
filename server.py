@@ -131,6 +131,8 @@ def init_db() -> None:
                 start_date TEXT,
                 end_date TEXT,
                 status TEXT NOT NULL,
+                status_mode TEXT NOT NULL DEFAULT 'manual',
+                cert INTEGER NOT NULL DEFAULT 0,
                 achievement TEXT NOT NULL,
                 links TEXT NOT NULL,
                 notes TEXT NOT NULL,
@@ -183,6 +185,17 @@ def init_db() -> None:
             if "streak" not in todo_columns:
                 connection.execute(
                     "ALTER TABLE todos ADD COLUMN streak INTEGER NOT NULL DEFAULT 0"
+                )
+            portfolio_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(portfolio_items)").fetchall()
+            }
+            if "cert" not in portfolio_columns:
+                connection.execute(
+                    "ALTER TABLE portfolio_items ADD COLUMN cert INTEGER NOT NULL DEFAULT 0"
+                )
+            if "status_mode" not in portfolio_columns:
+                connection.execute(
+                    "ALTER TABLE portfolio_items ADD COLUMN status_mode TEXT NOT NULL DEFAULT 'manual'"
                 )
 
 
@@ -252,6 +265,8 @@ def serialize_portfolio_item(row: sqlite3.Row) -> dict:
         "startDate": row["start_date"],
         "endDate": row["end_date"],
         "status": row["status"],
+        "statusMode": row["status_mode"] or "manual",
+        "cert": bool(row["cert"]),
         "achievement": row["achievement"],
         "links": row["links"],
         "notes": row["notes"],
@@ -328,21 +343,47 @@ def normalize_optional_date(value: object) -> str | None:
     return normalized
 
 
+def vietnam_today_iso(now: datetime | None = None) -> str:
+    current = now or datetime.now(UTC)
+    return (current + timedelta(hours=7)).date().isoformat()
+
+
+def infer_portfolio_status(start_date: str | None, end_date: str | None, today: str | None = None) -> str:
+    current_date = today or vietnam_today_iso()
+    if start_date and start_date > current_date:
+        return "planned"
+    if end_date and end_date < current_date:
+        return "completed"
+    if start_date or end_date:
+        return "active"
+    return "planned"
+
+
 def normalize_portfolio_payload(payload: dict, existing_created_at: str | None = None) -> dict:
     item_type = str(payload.get("type", "project")).strip().lower() or "project"
     title = str(payload.get("title", "")).strip()
     organization = str(payload.get("organization", "")).strip()
     role = str(payload.get("role", "")).strip()
     teammates = str(payload.get("teammates", "")).strip()
-    status = str(payload.get("status", "active")).strip().lower() or "active"
+    requested_status = str(payload.get("status", "active")).strip().lower() or "active"
+    status_mode = str(
+        payload.get("statusMode", "auto" if payload.get("status") == "auto" else "manual")
+    ).strip().lower() or "manual"
+    raw_cert = payload.get("cert", False)
+    if not isinstance(raw_cert, bool):
+        raise ValueError("Certificate flag is invalid.")
+    cert = raw_cert
     achievement = str(payload.get("achievement", "")).strip()
     links = str(payload.get("links", "")).strip()
     notes = str(payload.get("notes", "")).strip()
     start_date = normalize_optional_date(payload.get("startDate"))
     end_date = normalize_optional_date(payload.get("endDate"))
 
-    if item_type not in {"project", "competition"}:
+    if item_type not in {"project", "competition", "course"}:
         raise ValueError("Portfolio type is invalid.")
+    if status_mode not in {"auto", "manual"}:
+        raise ValueError("Portfolio status mode is invalid.")
+    status = infer_portfolio_status(start_date, end_date) if status_mode == "auto" else requested_status
     if status not in {"planned", "active", "completed"}:
         raise ValueError("Portfolio status is invalid.")
     if len(title) < 2:
@@ -374,6 +415,8 @@ def normalize_portfolio_payload(payload: dict, existing_created_at: str | None =
         "start_date": start_date,
         "end_date": end_date,
         "status": status,
+        "status_mode": status_mode,
+        "cert": cert,
         "achievement": achievement,
         "links": links,
         "notes": notes,
@@ -887,10 +930,10 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                 """
                 INSERT INTO portfolio_items (
                     id, user_id, type, title, organization, role, teammates,
-                    start_date, end_date, status, achievement, links, notes,
+                    start_date, end_date, status, status_mode, cert, achievement, links, notes,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
@@ -903,6 +946,8 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                     item_data["start_date"],
                     item_data["end_date"],
                     item_data["status"],
+                    item_data["status_mode"],
+                    int(item_data["cert"]),
                     item_data["achievement"],
                     item_data["links"],
                     item_data["notes"],
@@ -949,7 +994,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                 """
                 UPDATE portfolio_items
                 SET type = ?, title = ?, organization = ?, role = ?, teammates = ?,
-                    start_date = ?, end_date = ?, status = ?, achievement = ?,
+                    start_date = ?, end_date = ?, status = ?, status_mode = ?, cert = ?, achievement = ?,
                     links = ?, notes = ?, updated_at = ?
                 WHERE id = ? AND user_id = ?
                 """,
@@ -962,6 +1007,8 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                     item_data["start_date"],
                     item_data["end_date"],
                     item_data["status"],
+                    item_data["status_mode"],
+                    int(item_data["cert"]),
                     item_data["achievement"],
                     item_data["links"],
                     item_data["notes"],
