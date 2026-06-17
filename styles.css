@@ -5431,6 +5431,39 @@ textarea {
   border-radius: 10px;
 }
 
+@media (max-width: 760px) {
+  .window-shell[data-active-view="weekly"] .weekly-day-tabs {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(76px, 86px);
+    grid-template-columns: none;
+    gap: 10px;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 2px 2px 8px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .window-shell[data-active-view="weekly"] .weekly-day-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .window-shell[data-active-view="weekly"] .weekly-day-tab {
+    width: 100%;
+    min-width: 0;
+    padding: 8px 10px;
+  }
+
+  .window-shell[data-active-view="weekly"] .weekly-day-tab span,
+  .window-shell[data-active-view="weekly"] .weekly-day-tab small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
 .weekly-project-card {
   border-radius: 18px;
 }
