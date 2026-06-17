@@ -96,8 +96,18 @@ service cloud.firestore {
         && isTimestampText(request.resource.data.updatedAt);
     }
 
+    function validWeeklyProject(projectId) {
+      return request.resource.data.keys().hasOnly(['id', 'title', 'createdAt', 'updatedAt'])
+        && request.resource.data.id == projectId
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 1
+        && request.resource.data.title.size() <= 160
+        && isTimestampText(request.resource.data.createdAt)
+        && isTimestampText(request.resource.data.updatedAt);
+    }
+
     function validTodo(todoId) {
-      return request.resource.data.keys().hasOnly(['id', 'title', 'details', 'subtasks', 'dueDate', 'lane', 'sortOrder', 'priority', 'done', 'daily', 'dailyCompletedOn', 'streak', 'createdAt', 'updatedAt'])
+      return request.resource.data.keys().hasOnly(['id', 'title', 'details', 'subtasks', 'dueDate', 'lane', 'sortOrder', 'priority', 'done', 'daily', 'dailyCompletedOn', 'streak', 'projectId', 'projectTitle', 'weeklyDays', 'missed', 'createdAt', 'updatedAt'])
         && request.resource.data.id == todoId
         && request.resource.data.title is string
         && request.resource.data.title.size() >= 2
@@ -119,6 +129,13 @@ service cloud.firestore {
         && request.resource.data.streak is int
         && request.resource.data.streak >= 0
         && request.resource.data.streak <= 100000
+        && request.resource.data.projectId is string
+        && request.resource.data.projectId.size() <= 160
+        && request.resource.data.projectTitle is string
+        && request.resource.data.projectTitle.size() <= 160
+        && request.resource.data.weeklyDays is list
+        && request.resource.data.weeklyDays.size() <= 21
+        && request.resource.data.missed is bool
         && isTimestampText(request.resource.data.createdAt)
         && isTimestampText(request.resource.data.updatedAt);
     }
@@ -137,6 +154,12 @@ service cloud.firestore {
         allow read, delete: if isOwner(userId);
         allow create: if isOwner(userId) && validPlan(planId);
         allow update: if isOwner(userId) && validPlan(planId) && createdAtUnchanged();
+      }
+
+      match /weeklyProjects/{projectId} {
+        allow read, delete: if isOwner(userId);
+        allow create: if isOwner(userId) && validWeeklyProject(projectId);
+        allow update: if isOwner(userId) && validWeeklyProject(projectId) && createdAtUnchanged();
       }
 
       match /portfolio/{itemId} {

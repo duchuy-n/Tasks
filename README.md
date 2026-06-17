@@ -1,11 +1,13 @@
-# Planboard Sync
+# planner.
 
-Planboard Sync is a cross-device planner app with:
+planner. is a cross-device planner app with:
 
 - account registration and login
 - Firebase Auth + Firestore support for shared cloud sync
 - SQLite database for local development
 - shared calendar notes, day plans, and todos
+- weekly-first focus view with seven-day scheduling and an unscheduled backlog
+- compact backlog board for ideas, monthly work, daily routines, and completed tasks
 - installable PWA UI for Windows and iPhone home screen
 
 ## Local development
@@ -101,8 +103,8 @@ For the Firebase/Vercel flow, keep `PLANBOARD_API_BASE_URL` empty and set `PLANB
 ## Docker deploy
 
 ```powershell
-docker build -t planboard-sync .
-docker run -p 4173:4173 -e PORT=4173 -e PLANBOARD_ALLOWED_ORIGINS="https://your-app.example" planboard-sync
+docker build -t planner-sync .
+docker run -p 4173:4173 -e PORT=4173 -e PLANBOARD_ALLOWED_ORIGINS="https://your-app.example" planner-sync
 ```
 
 For real internet deployment, use your domain and set `PLANBOARD_ALLOWED_ORIGINS` to the exact frontend origins you trust.

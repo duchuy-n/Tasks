@@ -1,10 +1,44 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="120" fill="#f8ecde"/>
-  <circle cx="154" cy="152" r="62" fill="#f15a29"/>
-  <circle cx="358" cy="152" r="62" fill="#ff9a61"/>
-  <rect x="88" y="214" width="336" height="210" rx="48" fill="#2f4f59"/>
-  <rect x="122" y="252" width="180" height="24" rx="12" fill="#f8ecde"/>
-  <rect x="122" y="300" width="268" height="24" rx="12" fill="#f8ecde" opacity="0.86"/>
-  <rect x="122" y="348" width="224" height="24" rx="12" fill="#f8ecde" opacity="0.72"/>
-  <path d="M336 360l20 22 44-56" fill="none" stroke="#ffb066" stroke-linecap="round" stroke-linejoin="round" stroke-width="22"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="planner. app icon">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="40" x2="440" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#26345b"/>
+      <stop offset="0.52" stop-color="#141b31"/>
+      <stop offset="1" stop-color="#090e1a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="132" y1="112" x2="392" y2="414" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b9a7ff"/>
+      <stop offset="0.48" stop-color="#8f7cff"/>
+      <stop offset="1" stop-color="#5de4ff"/>
+    </linearGradient>
+    <linearGradient id="card" x1="116" y1="156" x2="396" y2="410" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#263252"/>
+      <stop offset="1" stop-color="#141b2f"/>
+    </linearGradient>
+    <filter id="shadow" x="40" y="54" width="432" height="420" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="26" stdDeviation="28" flood-color="#050915" flood-opacity="0.46"/>
+    </filter>
+    <filter id="glow" x="92" y="72" width="328" height="340" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="0" stdDeviation="14" flood-color="#8f7cff" flood-opacity="0.42"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="118" fill="url(#bg)"/>
+  <circle cx="120" cy="104" r="90" fill="#8f7cff" opacity="0.18"/>
+  <circle cx="406" cy="392" r="122" fill="#5de4ff" opacity="0.10"/>
+
+  <g filter="url(#shadow)">
+    <rect x="92" y="110" width="328" height="318" rx="74" fill="#101728" stroke="#334160" stroke-width="6"/>
+    <rect x="122" y="152" width="268" height="236" rx="42" fill="url(#card)" stroke="#465375" stroke-width="4"/>
+  </g>
+
+  <g filter="url(#glow)">
+    <path d="M163 212h70" stroke="#b9c8ff" stroke-width="22" stroke-linecap="round"/>
+    <path d="M163 270h144" stroke="#7f8bae" stroke-width="20" stroke-linecap="round" opacity="0.8"/>
+    <path d="M163 328h92" stroke="#7f8bae" stroke-width="20" stroke-linecap="round" opacity="0.55"/>
+    <path d="M299 314l36 38 76-92" fill="none" stroke="url(#accent)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <circle cx="170" cy="150" r="16" fill="#9b8cff"/>
+  <circle cx="342" cy="150" r="16" fill="#5de4ff"/>
+  <path d="M148 104v48M364 104v48" stroke="#6f7da2" stroke-width="14" stroke-linecap="round"/>
 </svg>

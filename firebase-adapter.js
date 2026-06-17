@@ -92,6 +92,10 @@
     return client.firestoreMod.collection(client.db, "users", uid, "portfolio");
   }
 
+  function weeklyProjectsRef(client, uid) {
+    return client.firestoreMod.collection(client.db, "users", uid, "weeklyProjects");
+  }
+
   function todosRef(client, uid) {
     return client.firestoreMod.collection(client.db, "users", uid, "todos");
   }
@@ -106,6 +110,10 @@
 
   function portfolioDocRef(client, uid, itemId) {
     return client.firestoreMod.doc(client.db, "users", uid, "portfolio", itemId);
+  }
+
+  function weeklyProjectDocRef(client, uid, projectId) {
+    return client.firestoreMod.doc(client.db, "users", uid, "weeklyProjects", projectId);
   }
 
   function todoDocRef(client, uid, todoId) {
@@ -204,15 +212,33 @@
         throw createError("Each subtask must be an object.", 400);
       }
       const text = String(item.text || "").trim();
-      if (!text) {
+      const days = Array.isArray(item.days)
+        ? item.days.filter((day) => typeof day === "string" && isValidDate(day)).slice(0, 7)
+        : [];
+      if (!text && !days.length) {
         return null;
       }
       return {
         id: String(item.id || crypto.randomUUID()),
         text: text.slice(0, 120),
         done: Boolean(item.done),
+        days,
       };
     }).filter(Boolean);
+  }
+
+  function normalizeWeeklyDays(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    const days = [];
+    value.forEach((item) => {
+      const day = normalizeDateInput(item);
+      if (isValidDate(day) && !days.includes(day) && days.length < 21) {
+        days.push(day);
+      }
+    });
+    return days;
   }
 
   function normalizeSortOrder(value, fallback = 0) {
@@ -307,6 +333,21 @@
     };
   }
 
+  function normalizeWeeklyProjectPayload(body = {}, existing = {}) {
+    const title = String(body.title || "").trim();
+    if (title.length < 1) {
+      throw createError("Weekly project title is required.", 400);
+    }
+    if (title.length > 160) {
+      throw createError("Weekly project title is too long.", 400);
+    }
+    return {
+      title,
+      createdAt: String(existing.createdAt || nowIso()),
+      updatedAt: nowIso(),
+    };
+  }
+
   function compareCreatedDesc(left, right) {
     return String(right.createdAt || "").localeCompare(String(left.createdAt || ""));
   }
@@ -366,6 +407,16 @@
     };
   }
 
+  function serializeWeeklyProjectDoc(snapshot) {
+    const data = snapshot.data() || {};
+    return {
+      id: snapshot.id,
+      title: String(data.title || ""),
+      createdAt: String(data.createdAt || ""),
+      updatedAt: String(data.updatedAt || ""),
+    };
+  }
+
   function serializeTodoDoc(snapshot) {
     const data = snapshot.data() || {};
     return {
@@ -381,6 +432,10 @@
       daily: Boolean(data.daily),
       dailyCompletedOn: data.dailyCompletedOn ? String(data.dailyCompletedOn) : null,
       streak: Number.isFinite(Number(data.streak)) ? Number(data.streak) : 0,
+      projectId: String(data.projectId || ""),
+      projectTitle: String(data.projectTitle || ""),
+      weeklyDays: normalizeWeeklyDays(data.weeklyDays),
+      missed: Boolean(data.missed),
       createdAt: String(data.createdAt || ""),
       updatedAt: String(data.updatedAt || ""),
     };
@@ -417,6 +472,10 @@
       daily: Boolean(data.daily),
       dailyCompletedOn: dailyCompletedOn && isValidDate(dailyCompletedOn) ? dailyCompletedOn : null,
       streak: Number.isInteger(streak) && streak >= 0 && streak <= 100000 ? streak : 0,
+      projectId: String(data.projectId || "").trim().slice(0, 160),
+      projectTitle: String(data.projectTitle || "").trim().slice(0, 160),
+      weeklyDays: normalizeWeeklyDays(data.weeklyDays),
+      missed: Boolean(data.missed),
       createdAt: timestampTextOrNow(data.createdAt),
       updatedAt: timestampTextOrNow(data.updatedAt),
     };
@@ -450,10 +509,11 @@
   }
 
   async function getBootstrapPayload(client, user) {
-    const [userSnapshot, noteSnapshots, planSnapshots, portfolioSnapshots, todoSnapshots] = await Promise.all([
+    const [userSnapshot, noteSnapshots, planSnapshots, weeklyProjectSnapshots, portfolioSnapshots, todoSnapshots] = await Promise.all([
       client.firestoreMod.getDoc(userRef(client, user.uid)),
       client.firestoreMod.getDocs(notesRef(client, user.uid)),
       client.firestoreMod.getDocs(plansRef(client, user.uid)),
+      client.firestoreMod.getDocs(weeklyProjectsRef(client, user.uid)),
       client.firestoreMod.getDocs(portfolioRef(client, user.uid)),
       client.firestoreMod.getDocs(todosRef(client, user.uid)),
     ]);
@@ -474,6 +534,13 @@
         String(left.createdAt || "").localeCompare(String(right.createdAt || ""))
       );
 
+    const weeklyProjects = weeklyProjectSnapshots.docs
+      .map(serializeWeeklyProjectDoc)
+      .sort((left, right) =>
+        String(left.createdAt || "").localeCompare(String(right.createdAt || "")) ||
+        String(left.title || "").localeCompare(String(right.title || ""))
+      );
+
     const portfolioItems = portfolioSnapshots.docs
       .map(serializePortfolioDoc)
       .sort(comparePortfolioItems);
@@ -490,6 +557,7 @@
       user: serializedUser,
       notes,
       plans,
+      weeklyProjects,
       portfolioItems,
       todos,
     };
@@ -512,6 +580,13 @@
         String(left.createdAt || "").localeCompare(String(right.createdAt || ""))
       );
 
+    const weeklyProjects = snapshots.weeklyProjects.docs
+      .map(serializeWeeklyProjectDoc)
+      .sort((left, right) =>
+        String(left.createdAt || "").localeCompare(String(right.createdAt || "")) ||
+        String(left.title || "").localeCompare(String(right.title || ""))
+      );
+
     const portfolioItems = snapshots.portfolio.docs
       .map(serializePortfolioDoc)
       .sort(comparePortfolioItems);
@@ -528,6 +603,7 @@
       user: serializedUser,
       notes,
       plans,
+      weeklyProjects,
       portfolioItems,
       todos,
     };
@@ -770,6 +846,57 @@
     return { ok: true };
   }
 
+  async function weeklyProjectTitleExists(client, uid, title, excludingId = "") {
+    const snapshots = await client.firestoreMod.getDocs(weeklyProjectsRef(client, uid));
+    const normalized = String(title || "").trim().toLowerCase();
+    return snapshots.docs.some((snapshot) =>
+      snapshot.id !== excludingId &&
+      String((snapshot.data() || {}).title || "").trim().toLowerCase() === normalized
+    );
+  }
+
+  async function handleCreateWeeklyProject(client, options) {
+    const body = requireBody(options);
+    const user = await requireUser(client);
+    const data = normalizeWeeklyProjectPayload(body);
+    if (await weeklyProjectTitleExists(client, user.uid, data.title)) {
+      throw createError("Weekly project already exists.", 409);
+    }
+    const ref = client.firestoreMod.doc(weeklyProjectsRef(client, user.uid));
+    const weeklyProject = {
+      id: ref.id,
+      ...data,
+    };
+    await client.firestoreMod.setDoc(ref, weeklyProject);
+    return { weeklyProject };
+  }
+
+  async function handleUpdateWeeklyProject(client, projectId, options) {
+    const body = requireBody(options);
+    const user = await requireUser(client);
+    const ref = weeklyProjectDocRef(client, user.uid, projectId);
+    const snapshot = await client.firestoreMod.getDoc(ref);
+    if (!snapshot.exists()) {
+      throw createError("Weekly project not found.", 404);
+    }
+    const data = normalizeWeeklyProjectPayload(body, snapshot.data() || {});
+    if (await weeklyProjectTitleExists(client, user.uid, data.title, projectId)) {
+      throw createError("Weekly project already exists.", 409);
+    }
+    const weeklyProject = {
+      id: projectId,
+      ...data,
+    };
+    await client.firestoreMod.setDoc(ref, weeklyProject);
+    return { weeklyProject };
+  }
+
+  async function handleDeleteWeeklyProject(client, projectId) {
+    const user = await requireUser(client);
+    await client.firestoreMod.deleteDoc(weeklyProjectDocRef(client, user.uid, projectId));
+    return { ok: true };
+  }
+
   async function handleCreateTodo(client, options) {
     const body = requireBody(options);
     const title = String(body.title || "").trim();
@@ -784,6 +911,10 @@
     const done = daily ? false : Boolean(body.done);
     const subtasks = normalizeSubtasks(body.subtasks);
     const sortOrder = normalizeSortOrder(body.sortOrder, 0);
+    const projectId = String(body.projectId || "").trim().slice(0, 160);
+    const projectTitle = String(body.projectTitle || "").trim().slice(0, 160);
+    const weeklyDays = normalizeWeeklyDays(body.weeklyDays);
+    const missed = Boolean(body.missed);
     if (title.length < 2) {
       throw createError("Task title is too short.", 400);
     }
@@ -819,6 +950,10 @@
       daily,
       dailyCompletedOn,
       streak,
+      projectId,
+      projectTitle,
+      weeklyDays,
+      missed,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -840,6 +975,10 @@
     const done = daily ? false : Boolean(body.done);
     const subtasks = normalizeSubtasks(body.subtasks);
     const sortOrder = normalizeSortOrder(body.sortOrder, 0);
+    const projectId = String(body.projectId || "").trim().slice(0, 160);
+    const projectTitle = String(body.projectTitle || "").trim().slice(0, 160);
+    const weeklyDays = normalizeWeeklyDays(body.weeklyDays);
+    const missed = Boolean(body.missed);
     if (title.length < 2) {
       throw createError("Task title is too short.", 400);
     }
@@ -879,6 +1018,10 @@
       daily,
       dailyCompletedOn,
       streak,
+      projectId,
+      projectTitle,
+      weeklyDays,
+      missed,
       createdAt: String(previous.createdAt || nowIso()),
       updatedAt: nowIso(),
     };
@@ -988,6 +1131,25 @@
     return { ok: true };
   }
 
+  async function handleResetWorkspace(client) {
+    const user = await requireUser(client);
+    const collections = [
+      notesRef(client, user.uid),
+      plansRef(client, user.uid),
+      weeklyProjectsRef(client, user.uid),
+      portfolioRef(client, user.uid),
+      todosRef(client, user.uid),
+    ];
+    const snapshots = await Promise.all(collections.map((ref) => client.firestoreMod.getDocs(ref)));
+    const docs = snapshots.flatMap((snapshot) => snapshot.docs);
+    for (let index = 0; index < docs.length; index += 450) {
+      const batch = client.firestoreMod.writeBatch(client.db);
+      docs.slice(index, index + 450).forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+    }
+    return { ok: true };
+  }
+
   async function handleDeleteTodo(client, todoId) {
     const user = await requireUser(client);
     await client.firestoreMod.deleteDoc(todoDocRef(client, user.uid, todoId));
@@ -1019,6 +1181,9 @@
       if (path === "/plans" && (options.method || "GET") === "POST") {
         return handleCreatePlan(client, options);
       }
+      if (path === "/weekly-projects" && (options.method || "GET") === "POST") {
+        return handleCreateWeeklyProject(client, options);
+      }
       if (path === "/portfolio" && (options.method || "GET") === "POST") {
         return handleCreatePortfolioItem(client, options);
       }
@@ -1031,9 +1196,13 @@
       if (path === "/todos/clear-completed" && (options.method || "GET") === "POST") {
         return handleClearCompleted(client);
       }
+      if (path === "/reset" && (options.method || "GET") === "POST") {
+        return handleResetWorkspace(client);
+      }
 
       const noteMatch = /^\/notes\/(\d{4}-\d{2}-\d{2})$/.exec(path);
       const planMatch = /^\/plans\/([A-Za-z0-9_-]+)$/.exec(path);
+      const weeklyProjectMatch = /^\/weekly-projects\/([A-Za-z0-9_-]+)$/.exec(path);
       const portfolioMatch = /^\/portfolio\/([A-Za-z0-9_-]+)$/.exec(path);
       const todoLaneMatch = /^\/todos\/([A-Za-z0-9_-]+)\/lane\/(ideas|month|week|today|done)$/.exec(path);
       const todoMatch = /^\/todos\/([A-Za-z0-9_-]+)$/.exec(path);
@@ -1046,6 +1215,12 @@
       }
       if (planMatch && (options.method || "GET") === "DELETE") {
         return handleDeletePlan(client, planMatch[1]);
+      }
+      if (weeklyProjectMatch && (options.method || "GET") === "PUT") {
+        return handleUpdateWeeklyProject(client, weeklyProjectMatch[1], options);
+      }
+      if (weeklyProjectMatch && (options.method || "GET") === "DELETE") {
+        return handleDeleteWeeklyProject(client, weeklyProjectMatch[1]);
       }
       if (portfolioMatch && (options.method || "GET") === "PUT") {
         return handleUpdatePortfolioItem(client, portfolioMatch[1], options);
@@ -1081,12 +1256,13 @@
       user: null,
       notes: null,
       plans: null,
+      weeklyProjects: null,
       portfolio: null,
       todos: null,
     };
     const unsubscriptions = [];
     const emitIfReady = () => {
-      if (snapshots.user && snapshots.notes && snapshots.plans && snapshots.portfolio && snapshots.todos) {
+      if (snapshots.user && snapshots.notes && snapshots.plans && snapshots.weeklyProjects && snapshots.portfolio && snapshots.todos) {
         onPayload(serializeBootstrapSnapshots(user, snapshots));
       }
     };
@@ -1111,6 +1287,12 @@
     unsubscriptions.push(
       client.firestoreMod.onSnapshot(plansRef(client, user.uid), (snapshot) => {
         snapshots.plans = snapshot;
+        emitIfReady();
+      }, handleError)
+    );
+    unsubscriptions.push(
+      client.firestoreMod.onSnapshot(weeklyProjectsRef(client, user.uid), (snapshot) => {
+        snapshots.weeklyProjects = snapshot;
         emitIfReady();
       }, handleError)
     );

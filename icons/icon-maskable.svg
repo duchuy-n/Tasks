@@ -1,10 +1,34 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" fill="#f15a29"/>
-  <rect x="84" y="90" width="344" height="332" rx="56" fill="#fff4e8"/>
-  <circle cx="170" cy="152" r="28" fill="#f15a29"/>
-  <circle cx="342" cy="152" r="28" fill="#f15a29"/>
-  <rect x="132" y="210" width="188" height="24" rx="12" fill="#33525b"/>
-  <rect x="132" y="258" width="244" height="24" rx="12" fill="#33525b" opacity="0.82"/>
-  <rect x="132" y="306" width="214" height="24" rx="12" fill="#33525b" opacity="0.66"/>
-  <path d="M324 320l22 24 46-58" fill="none" stroke="#f15a29" stroke-linecap="round" stroke-linejoin="round" stroke-width="22"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="planner. app icon">
+  <defs>
+    <linearGradient id="mask-bg" x1="70" y1="28" x2="452" y2="492" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2a3964"/>
+      <stop offset="0.58" stop-color="#121a30"/>
+      <stop offset="1" stop-color="#070b15"/>
+    </linearGradient>
+    <linearGradient id="mask-accent" x1="150" y1="136" x2="386" y2="374" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c4b5ff"/>
+      <stop offset="0.55" stop-color="#9b8cff"/>
+      <stop offset="1" stop-color="#63e6ff"/>
+    </linearGradient>
+    <linearGradient id="mask-card" x1="126" y1="156" x2="386" y2="388" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#273354"/>
+      <stop offset="1" stop-color="#141b30"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#mask-bg)"/>
+  <circle cx="112" cy="96" r="118" fill="#9b8cff" opacity="0.18"/>
+  <circle cx="424" cy="414" r="144" fill="#63e6ff" opacity="0.10"/>
+
+  <rect x="100" y="104" width="312" height="322" rx="72" fill="#0f1628" stroke="#364667" stroke-width="8"/>
+  <rect x="128" y="148" width="256" height="238" rx="42" fill="url(#mask-card)" stroke="#536080" stroke-width="4"/>
+
+  <path d="M162 210h72" stroke="#d8e0ff" stroke-width="22" stroke-linecap="round"/>
+  <path d="M162 270h138" stroke="#8f9abd" stroke-width="20" stroke-linecap="round" opacity="0.82"/>
+  <path d="M162 328h88" stroke="#8f9abd" stroke-width="20" stroke-linecap="round" opacity="0.58"/>
+  <path d="M298 314l36 38 76-92" fill="none" stroke="url(#mask-accent)" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <circle cx="170" cy="148" r="16" fill="#a99cff"/>
+  <circle cx="342" cy="148" r="16" fill="#63e6ff"/>
+  <path d="M148 96v54M364 96v54" stroke="#7583aa" stroke-width="14" stroke-linecap="round"/>
 </svg>

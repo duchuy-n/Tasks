@@ -1,23 +1,41 @@
 {
-  "name": "Planboard",
-  "short_name": "Planboard",
-  "description": "A lightweight planner app with month calendar, daily notes, and todo tracking.",
+  "name": "planner.",
+  "short_name": "planner.",
+  "description": "A focused weekly planner with board, calendar, portfolio, and daily routines.",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#f7f1e8",
-  "theme_color": "#f15a29",
+  "background_color": "#111727",
+  "theme_color": "#111727",
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "icons/icon-any.svg",
+      "src": "icons/icon-any.svg?v=planner-aurora-2",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
     },
     {
-      "src": "icons/icon-maskable.svg",
+      "src": "icons/icon-192.png?v=planner-aurora-2",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png?v=planner-aurora-2",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-maskable.svg?v=planner-aurora-2",
       "sizes": "any",
       "type": "image/svg+xml",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icons/icon-maskable-512.png?v=planner-aurora-2",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "maskable"
     }
   ]

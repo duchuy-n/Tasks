@@ -99,6 +99,8 @@ test("calendar deadline grouping excludes daily tasks and empty dates", () => {
     { id: "b", dueDate: "2026-05-02", daily: true },
     { id: "c", dueDate: "", daily: false },
     { id: "d", dueDate: "2026-05-03", daily: false },
+    { id: "e", dueDate: "2026-05-02", daily: false, projectTitle: "Weekly Project" },
+    { id: "f", dueDate: "2026-05-02", daily: false, projectId: "weekly-1" },
   ]);
 
   assert.deepEqual([...map.keys()], ["2026-05-02", "2026-05-03"]);

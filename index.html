@@ -3,25 +3,29 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#22262b">
+  <meta name="theme-color" content="#111727">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Planboard">
-  <title>Planboard Sync</title>
+  <meta name="apple-mobile-web-app-title" content="planner.">
+  <title>planner.</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" href="icons/icon-any.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="icons/icon-any.svg">
+  <link rel="icon" href="icons/icon-any.svg?v=planner-aurora-2" type="image/svg+xml">
+  <link rel="alternate icon" href="icons/icon-192.png?v=planner-aurora-2" type="image/png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png?v=planner-aurora-2">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div id="authScreen" class="auth-screen">
     <div class="auth-card">
-      <p class="eyebrow">Planboard Sync</p>
+      <p class="eyebrow">planner.</p>
       <h1>Fast, focused planning that stays in sync.</h1>
       <p class="auth-copy">
         Use the same board on Windows and iPhone with a Reminders-style layout:
-        columns, drag-and-drop, and synced data on one account.
+            weekly planning, daily focus, and synced data on one account.
       </p>
 
       <div class="auth-switcher">
@@ -63,20 +67,31 @@
 
   <div id="appShell" class="window-shell app-hidden">
     <aside class="sidebar">
-      <div class="window-dots" aria-hidden="true">
-        <span></span>
-        <span></span>
-        <span></span>
+      <div class="sidebar-topbar">
+        <strong class="sidebar-brand">planner<span>.</span></strong>
+        <button id="sidebarToggleButton" class="sidebar-toggle" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">
+          <span aria-hidden="true">&#8249;</span>
+        </button>
       </div>
 
-      <button class="active-list" type="button">
-        <span class="active-list__icon">&#9716;</span>
-        <span class="active-list__body">
-          <strong>Tasks</strong>
-          <span>Main board</span>
-        </span>
-        <span id="allTaskCountBadge" class="active-list__count">0</span>
-      </button>
+      <nav class="sidebar-primary-nav" aria-label="Primary view">
+        <button id="weeklyViewButton" class="sidebar-nav-item is-active" type="button">
+          <span class="sidebar-nav-item__icon" aria-hidden="true">W</span>
+          <span class="sidebar-nav-item__copy"><strong>Weekly</strong><small>Plan the next seven days</small></span>
+        </button>
+        <button id="boardViewButton" class="sidebar-nav-item" type="button">
+          <span class="sidebar-nav-item__icon" aria-hidden="true">B</span>
+          <span class="sidebar-nav-item__copy"><strong>Board</strong><small>Backlog and daily routines</small></span>
+        </button>
+        <button id="calendarViewButton" class="sidebar-nav-item" type="button">
+          <span class="sidebar-nav-item__icon" aria-hidden="true">C</span>
+          <span class="sidebar-nav-item__copy"><strong>Calendar</strong><small>Deadlines and daily plans</small></span>
+        </button>
+        <button id="portfolioViewButton" class="sidebar-nav-item" type="button">
+          <span class="sidebar-nav-item__icon" aria-hidden="true">P</span>
+          <span class="sidebar-nav-item__copy"><strong>Portfolio</strong><small>Projects, courses, results</small></span>
+        </button>
+      </nav>
 
       <section class="sidebar-group">
         <p class="sidebar-group__title">My Lists</p>
@@ -122,8 +137,8 @@
             </select>
           </label>
 
-          <button id="themeToggleButton" class="toolbar-button toolbar-button--sidebar" type="button">Light Mode</button>
           <button id="notificationButton" class="toolbar-button toolbar-button--sidebar" type="button">Enable In-app Alerts</button>
+          <button id="resetAllButton" class="toolbar-button toolbar-button--sidebar toolbar-button--danger" type="button">Reset all data</button>
 
           <p id="filterStateLabel" class="board-filter-state board-filter-state--sidebar" aria-live="polite"></p>
         </div>
@@ -142,7 +157,7 @@
         <div class="sidebar-profile">
           <div id="avatarBadge" class="avatar-badge">PB</div>
           <div class="sidebar-profile__copy">
-            <p id="workspaceNameLabel" class="sidebar-meta__workspace">Planboard</p>
+            <p id="workspaceNameLabel" class="sidebar-meta__workspace">planner.</p>
             <p id="userNameLabel" class="sidebar-meta__user">-</p>
           </div>
         </div>
@@ -160,12 +175,7 @@
     <main class="board">
       <header class="board-header">
         <div class="board-header__copy">
-          <h1>Tasks</h1>
-          <div class="view-switcher" role="tablist" aria-label="Primary view">
-            <button id="boardViewButton" class="chip is-active" type="button">Board</button>
-            <button id="calendarViewButton" class="chip" type="button">Calendar</button>
-            <button id="portfolioViewButton" class="chip" type="button">Portfolio</button>
-          </div>
+          <h1>planner.</h1>
           <p class="board-header__meta">
             <span id="completedMeta">0 completed</span>
             <button id="clearCompletedButton" class="clear-link" type="button">Clear</button>
@@ -185,7 +195,83 @@
 
       <p id="statusMessage" class="message message--inline" aria-live="polite"></p>
 
-      <section id="boardView" class="columns board-view board-view--board">
+      <section id="weeklyView" class="weekly-page board-view board-view--weekly">
+        <nav class="weekly-subnav" aria-label="Weekly pages">
+          <button id="weeklyPlannerButton" class="weekly-subnav__button is-active" type="button">Planner</button>
+          <button id="weeklyStatsButton" class="weekly-subnav__button" type="button">Stats</button>
+          <button id="weeklyArchiveButton" class="weekly-subnav__button" type="button">Archive</button>
+        </nav>
+        <div class="weekly-toolbar">
+          <div>
+            <p id="weeklyPlanningLabel" class="eyebrow">Planning for</p>
+            <h2 id="weeklyRangeLabel">This week</h2>
+            <p id="weeklyProgressLabel" class="weekly-progress-label">0 of 0 tasks complete</p>
+          </div>
+          <div class="weekly-toolbar__actions">
+            <button id="weeklyPreviousButton" class="toolbar-button" type="button">Previous</button>
+            <button id="weeklyTodayButton" class="toolbar-button" type="button">This week</button>
+            <button id="weeklyNextButton" class="toolbar-button" type="button">Next</button>
+            <button id="weeklyEndButton" class="toolbar-button toolbar-button--primary" type="button">End week</button>
+          </div>
+        </div>
+        <div id="weeklyProgress" class="weekly-progress" aria-hidden="true">
+          <span id="weeklyProgressBar"></span>
+        </div>
+        <div id="weeklyPlannerPage" class="weekly-planner-page">
+          <section id="weeklyProjects" class="weekly-projects">
+            <div class="weekly-backlog__heading">
+              <div>
+                <p class="eyebrow">Projects</p>
+                <h2>Work by project</h2>
+              </div>
+              <button id="weeklyAddProjectButton" class="toolbar-button" type="button">+ Add project</button>
+            </div>
+            <div id="weeklyProjectList" class="weekly-project-list"></div>
+          </section>
+          <section class="weekly-this-week">
+            <div class="weekly-this-week__heading">
+              <div>
+                <p class="eyebrow">This week</p>
+                <h2 id="weeklyFocusLabel">Focusing today</h2>
+              </div>
+              <button id="weeklyShowAllButton" class="plain-link" type="button">Show all days</button>
+            </div>
+            <div id="weeklyDays" class="weekly-days"></div>
+            <section id="weeklyBacklog" class="weekly-backlog">
+              <div class="weekly-backlog__heading">
+                <div>
+                  <p class="eyebrow">Unscheduled</p>
+                  <h2>Plan these later</h2>
+                </div>
+                <span id="weeklyBacklogCount" class="weekly-backlog__count">0</span>
+              </div>
+              <div id="weeklyBacklogList" class="weekly-backlog__list"></div>
+            </section>
+          </section>
+        </div>
+        <section id="weeklyArchivePanel" class="weekly-insight-panel" hidden>
+          <div class="weekly-backlog__heading">
+            <div>
+              <p class="eyebrow">Archive</p>
+              <h2>Archived weeks</h2>
+            </div>
+            <button id="weeklyClearArchiveButton" class="plain-link" type="button">Clear archive</button>
+          </div>
+          <div id="weeklyArchiveList" class="weekly-archive-list"></div>
+        </section>
+        <section id="weeklyStatsPanel" class="weekly-insight-panel" hidden>
+          <div class="weekly-backlog__heading">
+            <div>
+              <p class="eyebrow">Stats</p>
+              <h2>Weekly momentum</h2>
+            </div>
+          </div>
+          <div id="weeklyStatsGrid" class="weekly-stats-grid"></div>
+          <div id="weeklyWeekdayStats" class="weekly-weekday-stats"></div>
+        </section>
+      </section>
+
+      <section id="boardView" class="columns board-view board-view--board board-view--hidden">
         <article class="column" data-lane="ideas">
           <div class="column__header">
             <h2>Ideas</h2>
@@ -202,20 +288,12 @@
           <div id="lane-month" class="column__body"></div>
         </article>
 
-        <article class="column" data-lane="week">
+        <article class="column" data-lane="daily">
           <div class="column__header">
-            <h2>This Week</h2>
-            <span id="count-week" class="column__count">0</span>
+            <h2>Daily</h2>
+            <span id="count-daily" class="column__count">0</span>
           </div>
-          <div id="lane-week" class="column__body"></div>
-        </article>
-
-        <article class="column" data-lane="today">
-          <div class="column__header">
-            <h2>Today</h2>
-            <span id="count-today" class="column__count">0</span>
-          </div>
-          <div id="lane-today" class="column__body"></div>
+          <div id="lane-daily" class="column__body"></div>
         </article>
 
         <article class="column" data-lane="done">
@@ -314,9 +392,8 @@
     </main>
 
     <nav class="mobile-tabbar" aria-label="Mobile sections">
-      <button class="mobile-tabbar__button" type="button" data-mobile-view="today">Today</button>
+      <button class="mobile-tabbar__button" type="button" data-mobile-view="daily">Daily</button>
       <button class="mobile-tabbar__button" type="button" data-mobile-view="ideas">Ideas</button>
-      <button class="mobile-tabbar__button" type="button" data-mobile-view="week">Week</button>
       <button class="mobile-tabbar__button" type="button" data-mobile-view="month">Month</button>
       <button class="mobile-tabbar__button" type="button" data-mobile-view="done">Done</button>
       <button class="mobile-tabbar__button" type="button" data-mobile-view="boardtools">Tools</button>
@@ -357,8 +434,8 @@
             <select id="detailLaneInput">
               <option value="ideas">Ideas</option>
               <option value="month">This Month</option>
-              <option value="week">This Week</option>
-              <option value="today">Today</option>
+              <option value="week" hidden>Scheduled this week</option>
+              <option value="today" hidden>Scheduled today</option>
               <option value="done">Completed</option>
             </select>
           </label>
@@ -524,8 +601,6 @@
               <option value="">None</option>
               <option value="ideas">Ideas</option>
               <option value="month">This Month</option>
-              <option value="week">This Week</option>
-              <option value="today">Today</option>
             </select>
           </label>
           <label class="field">
@@ -540,6 +615,12 @@
         <label class="field">
           <span>Deadline (optional)</span>
           <input id="todoDueDateInput" name="dueDate" type="date">
+        </label>
+        <label class="field">
+          <span>Project (optional)</span>
+          <select id="todoProjectInput" name="project">
+            <option value="">No project</option>
+          </select>
         </label>
         <label class="check-field">
           <input id="todoDailyInput" name="daily" type="checkbox">
@@ -713,6 +794,7 @@
 
   <script src="config.js"></script>
   <script src="planboard-domain.js"></script>
+  <script src="planner-utils.js"></script>
   <script src="portfolio-utils.js"></script>
   <script src="planboard-api-client.js"></script>
   <script src="firebase-adapter.js"></script>

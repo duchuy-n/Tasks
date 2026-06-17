@@ -32,6 +32,7 @@ PUBLIC_FILES = {
     "index.html",
     "styles.css",
     "planboard-domain.js",
+    "planner-utils.js",
     "portfolio-utils.js",
     "planboard-api-client.js",
     "app.js",
@@ -41,6 +42,13 @@ PUBLIC_FILES = {
     "manifest.webmanifest",
 }
 PUBLIC_ICON_SUFFIXES = {".svg", ".png", ".ico", ".webp"}
+DETAIL_METADATA_PATTERNS = {
+    "weekly_days": re.compile(r"^\[\[weekly-days:([^\]]*)\]\]\s*", re.IGNORECASE),
+    "lane": re.compile(r"^\[\[lane:(ideas|month|week|today|done)\]\]\s*", re.IGNORECASE),
+    "project_id": re.compile(r"^\[\[project-id:([^\]]+)\]\]\s*", re.IGNORECASE),
+    "project_title": re.compile(r"^\[\[project:([^\]]+)\]\]\s*", re.IGNORECASE),
+    "missed": re.compile(r"^\[\[missed:1\]\]\s*", re.IGNORECASE),
+}
 
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 
@@ -115,6 +123,10 @@ def init_db() -> None:
                 daily INTEGER NOT NULL DEFAULT 0,
                 daily_completed_on TEXT,
                 streak INTEGER NOT NULL DEFAULT 0,
+                project_id TEXT NOT NULL DEFAULT '',
+                project_title TEXT NOT NULL DEFAULT '',
+                weekly_days TEXT NOT NULL DEFAULT '[]',
+                missed INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -136,6 +148,15 @@ def init_db() -> None:
                 achievement TEXT NOT NULL,
                 links TEXT NOT NULL,
                 notes TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS weekly_projects (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                title TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -186,6 +207,23 @@ def init_db() -> None:
                 connection.execute(
                     "ALTER TABLE todos ADD COLUMN streak INTEGER NOT NULL DEFAULT 0"
                 )
+            if "project_id" not in todo_columns:
+                connection.execute(
+                    "ALTER TABLE todos ADD COLUMN project_id TEXT NOT NULL DEFAULT ''"
+                )
+            if "project_title" not in todo_columns:
+                connection.execute(
+                    "ALTER TABLE todos ADD COLUMN project_title TEXT NOT NULL DEFAULT ''"
+                )
+            if "weekly_days" not in todo_columns:
+                connection.execute(
+                    "ALTER TABLE todos ADD COLUMN weekly_days TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "missed" not in todo_columns:
+                connection.execute(
+                    "ALTER TABLE todos ADD COLUMN missed INTEGER NOT NULL DEFAULT 0"
+                )
+            migrate_todo_metadata(connection)
             portfolio_columns = {
                 row["name"] for row in connection.execute("PRAGMA table_info(portfolio_items)").fetchall()
             }
@@ -231,15 +269,36 @@ def serialize_plan(row: sqlite3.Row) -> dict:
     }
 
 
+def serialize_weekly_project(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def row_value(row: sqlite3.Row, key: str, fallback=None):
+    return row[key] if key in row.keys() else fallback
+
+
 def serialize_todo(row: sqlite3.Row) -> dict:
     try:
         subtasks = json.loads(row["subtasks"] or "[]")
     except (TypeError, json.JSONDecodeError):
         subtasks = []
+    parsed = parse_todo_details_metadata(row["details"])
+    try:
+        weekly_days = json.loads(row_value(row, "weekly_days", "[]") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        weekly_days = []
+    weekly_days = normalize_weekly_days(weekly_days or parsed["weekly_days"])
+    project_id = str(row_value(row, "project_id", "") or parsed["project_id"]).strip()
+    project_title = str(row_value(row, "project_title", "") or parsed["project_title"]).strip()
     return {
         "id": row["id"],
         "title": row["title"],
-        "details": row["details"],
+        "details": parsed["details"],
         "subtasks": subtasks if isinstance(subtasks, list) else [],
         "dueDate": row["due_date"],
         "lane": row["lane"] or "ideas",
@@ -249,6 +308,10 @@ def serialize_todo(row: sqlite3.Row) -> dict:
         "daily": bool(row["daily"]),
         "dailyCompletedOn": row["daily_completed_on"],
         "streak": row["streak"] if row["streak"] is not None else 0,
+        "projectId": project_id,
+        "projectTitle": project_title,
+        "weeklyDays": weekly_days,
+        "missed": bool(row_value(row, "missed", 0)) or parsed["missed"],
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
     }
@@ -310,16 +373,107 @@ def normalize_subtasks(value: object) -> list[dict]:
         if not isinstance(item, dict):
             raise ValueError("Each subtask must be an object.")
         text = str(item.get("text", "")).strip()
-        if not text:
+        days = [
+            str(day)
+            for day in (item.get("days") if isinstance(item.get("days"), list) else [])
+            if isinstance(day, str) and is_valid_date(day)
+        ][:7]
+        if not text and not days:
             continue
         normalized.append(
             {
                 "id": str(item.get("id") or uuid4()),
                 "text": text[:120],
                 "done": bool(item.get("done")),
+                "days": days,
             }
         )
     return normalized
+
+
+def normalize_weekly_days(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    days = []
+    for item in value:
+        day = str(item or "").strip()
+        if is_valid_date(day) and day not in days:
+            days.append(day)
+        if len(days) >= 21:
+            break
+    return days
+
+
+def parse_todo_details_metadata(raw_details: object) -> dict:
+    details = str(raw_details or "").strip()
+    metadata = {
+        "details": details,
+        "project_id": "",
+        "project_title": "",
+        "weekly_days": [],
+        "missed": False,
+        "lane": "",
+    }
+    changed = True
+    while changed:
+        changed = False
+        for key, pattern in DETAIL_METADATA_PATTERNS.items():
+            match = pattern.match(details)
+            if not match:
+                continue
+            changed = True
+            if key == "weekly_days":
+                metadata["weekly_days"] = normalize_weekly_days([
+                    item.strip() for item in match.group(1).split(",")
+                ])
+            elif key == "missed":
+                metadata["missed"] = True
+            elif key == "lane":
+                metadata["lane"] = match.group(1).lower()
+            elif key == "project_id":
+                metadata["project_id"] = match.group(1).strip()[:MAX_TITLE_LENGTH]
+            elif key == "project_title":
+                metadata["project_title"] = match.group(1).strip()[:MAX_TITLE_LENGTH]
+            details = details[match.end():].strip()
+            break
+    metadata["details"] = details
+    return metadata
+
+
+def normalize_todo_weekly_metadata(payload: dict, details: str) -> tuple[str, str, list[str], bool, str]:
+    parsed = parse_todo_details_metadata(details)
+    clean_details = parsed["details"]
+    project_id = str(payload.get("projectId", parsed["project_id"]) or "").strip()[:MAX_TITLE_LENGTH]
+    project_title = str(payload.get("projectTitle", parsed["project_title"]) or "").strip()[:MAX_TITLE_LENGTH]
+    weekly_days = normalize_weekly_days(payload.get("weeklyDays", parsed["weekly_days"]))
+    missed = bool(payload.get("missed", parsed["missed"]))
+    return project_id, project_title, weekly_days, missed, clean_details
+
+
+def migrate_todo_metadata(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        "SELECT id, details, project_id, project_title, weekly_days, missed FROM todos"
+    ).fetchall()
+    for row in rows:
+        parsed = parse_todo_details_metadata(row["details"])
+        if parsed["details"] == row["details"] and not parsed["project_id"] and not parsed["project_title"] and not parsed["weekly_days"] and not parsed["missed"]:
+            continue
+        project_id = row["project_id"] or parsed["project_id"]
+        project_title = row["project_title"] or parsed["project_title"]
+        try:
+            existing_days = json.loads(row["weekly_days"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            existing_days = []
+        weekly_days = normalize_weekly_days(existing_days or parsed["weekly_days"])
+        missed = bool(row["missed"]) or parsed["missed"]
+        connection.execute(
+            """
+            UPDATE todos
+            SET details = ?, project_id = ?, project_title = ?, weekly_days = ?, missed = ?
+            WHERE id = ?
+            """,
+            (parsed["details"], project_id, project_title, json.dumps(weekly_days), 1 if missed else 0, row["id"]),
+        )
 
 
 def normalize_sort_order(value: object, fallback: float) -> float:
@@ -475,10 +629,19 @@ def bootstrap_payload(connection: sqlite3.Connection, user_id: str, user_row: sq
         """,
         (user_id,),
     ).fetchall()
+    weekly_projects = connection.execute(
+        """
+        SELECT * FROM weekly_projects
+        WHERE user_id = ?
+        ORDER BY created_at ASC, title ASC
+        """,
+        (user_id,),
+    ).fetchall()
     return {
         "user": serialize_user(user_row),
         "notes": [serialize_note(row) for row in notes],
         "plans": [serialize_plan(row) for row in plans],
+        "weeklyProjects": [serialize_weekly_project(row) for row in weekly_projects],
         "todos": [serialize_todo(row) for row in todos],
         "portfolioItems": [serialize_portfolio_item(row) for row in portfolio_items],
     }
@@ -535,6 +698,9 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         if route == "/api/auth/logout":
             self.handle_logout()
             return
+        if route == "/api/reset":
+            self.handle_reset_workspace()
+            return
         if route == "/api/todos/clear-completed":
             self.handle_clear_completed_todos()
             return
@@ -543,6 +709,9 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
         if route == "/api/plans":
             self.handle_create_plan()
+            return
+        if route == "/api/weekly-projects":
+            self.handle_create_weekly_project()
             return
         if route == "/api/portfolio":
             self.handle_create_portfolio_item()
@@ -556,6 +725,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         route = self.route_path()
         note_match = re.fullmatch(r"/api/notes/(\d{4}-\d{2}-\d{2})", route)
         plan_match = re.fullmatch(r"/api/plans/([a-f0-9-]+)", route)
+        weekly_project_match = re.fullmatch(r"/api/weekly-projects/([a-f0-9-]+)", route)
         portfolio_match = re.fullmatch(r"/api/portfolio/([a-f0-9-]+)", route)
         todo_lane_match = re.fullmatch(r"/api/todos/([a-f0-9-]+)/lane/(ideas|month|week|today|done)", route)
         todo_match = re.fullmatch(r"/api/todos/([a-f0-9-]+)", route)
@@ -564,6 +734,9 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
         if plan_match:
             self.handle_update_plan(plan_match.group(1))
+            return
+        if weekly_project_match:
+            self.handle_update_weekly_project(weekly_project_match.group(1))
             return
         if portfolio_match:
             self.handle_update_portfolio_item(portfolio_match.group(1))
@@ -579,10 +752,14 @@ class PlanboardHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         route = self.route_path()
         plan_match = re.fullmatch(r"/api/plans/([a-f0-9-]+)", route)
+        weekly_project_match = re.fullmatch(r"/api/weekly-projects/([a-f0-9-]+)", route)
         portfolio_match = re.fullmatch(r"/api/portfolio/([a-f0-9-]+)", route)
         todo_match = re.fullmatch(r"/api/todos/([a-f0-9-]+)", route)
         if plan_match:
             self.handle_delete_plan(plan_match.group(1))
+            return
+        if weekly_project_match:
+            self.handle_delete_weekly_project(weekly_project_match.group(1))
             return
         if portfolio_match:
             self.handle_delete_portfolio_item(portfolio_match.group(1))
@@ -656,7 +833,8 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com "
             "https://identitytoolkit.googleapis.com https://securetoken.googleapis.com "
             "https://firestore.googleapis.com; "
-            "style-src 'self'; "
+            "style-src 'self' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
             "img-src 'self' data:; "
             "manifest-src 'self'; "
             "base-uri 'self'; "
@@ -770,6 +948,17 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
         self.respond_json({"user": serialize_user(user)})
         connection.close()
+
+    def handle_reset_workspace(self) -> None:
+        try:
+            connection, user = self.auth_user()
+        except PermissionError:
+            return
+        with connection:
+            for table in ("daily_notes", "plans", "weekly_projects", "portfolio_items", "todos"):
+                connection.execute(f"DELETE FROM {table} WHERE user_id = ?", (user["id"],))
+        connection.close()
+        self.respond_json({"ok": True})
 
     def handle_upsert_note(self, note_date: str) -> None:
         try:
@@ -911,6 +1100,109 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
         self.respond_json({"plan": serialize_plan(plan)})
 
+    def handle_create_weekly_project(self) -> None:
+        try:
+            payload = self.parse_json()
+        except ValueError:
+            return
+
+        title = str(payload.get("title", "")).strip()
+        if len(title) < 1:
+            self.respond_json({"error": "Weekly project title is required."}, HTTPStatus.BAD_REQUEST)
+            return
+        if len(title) > MAX_TITLE_LENGTH:
+            self.respond_json({"error": "Weekly project title is too long."}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            connection, user = self.auth_user()
+        except PermissionError:
+            return
+
+        existing = connection.execute(
+            "SELECT id FROM weekly_projects WHERE user_id = ? AND lower(title) = lower(?)",
+            (user["id"], title),
+        ).fetchone()
+        if existing:
+            connection.close()
+            self.respond_json({"error": "Weekly project already exists."}, HTTPStatus.CONFLICT)
+            return
+
+        project_id = str(uuid4())
+        timestamp = now_iso()
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO weekly_projects (id, user_id, title, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (project_id, user["id"], title, timestamp, timestamp),
+            )
+            project = connection.execute(
+                "SELECT * FROM weekly_projects WHERE id = ? AND user_id = ?",
+                (project_id, user["id"]),
+            ).fetchone()
+        connection.close()
+        self.respond_json({"weeklyProject": serialize_weekly_project(project)}, HTTPStatus.CREATED)
+
+    def handle_update_weekly_project(self, project_id: str) -> None:
+        try:
+            payload = self.parse_json()
+        except ValueError:
+            return
+
+        title = str(payload.get("title", "")).strip()
+        if len(title) < 1:
+            self.respond_json({"error": "Weekly project title is required."}, HTTPStatus.BAD_REQUEST)
+            return
+        if len(title) > MAX_TITLE_LENGTH:
+            self.respond_json({"error": "Weekly project title is too long."}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            connection, user = self.auth_user()
+        except PermissionError:
+            return
+
+        duplicate = connection.execute(
+            "SELECT id FROM weekly_projects WHERE user_id = ? AND id != ? AND lower(title) = lower(?)",
+            (user["id"], project_id, title),
+        ).fetchone()
+        if duplicate:
+            connection.close()
+            self.respond_json({"error": "Weekly project already exists."}, HTTPStatus.CONFLICT)
+            return
+
+        with connection:
+            connection.execute(
+                """
+                UPDATE weekly_projects
+                SET title = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (title, now_iso(), project_id, user["id"]),
+            )
+            project = connection.execute(
+                "SELECT * FROM weekly_projects WHERE id = ? AND user_id = ?",
+                (project_id, user["id"]),
+            ).fetchone()
+        connection.close()
+        if not project:
+            self.respond_json({"error": "Weekly project not found."}, HTTPStatus.NOT_FOUND)
+            return
+        self.respond_json({"weeklyProject": serialize_weekly_project(project)})
+
+    def handle_delete_weekly_project(self, project_id: str) -> None:
+        try:
+            connection, user = self.auth_user()
+        except PermissionError:
+            return
+        with connection:
+            connection.execute(
+                "DELETE FROM weekly_projects WHERE id = ? AND user_id = ?",
+                (project_id, user["id"]),
+            )
+        connection.close()
+        self.respond_json({"ok": True})
+
     def handle_create_portfolio_item(self) -> None:
         try:
             payload = self.parse_json()
@@ -1045,6 +1337,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
 
         title = str(payload.get("title", "")).strip()
         details = str(payload.get("details", "")).strip()
+        project_id, project_title, weekly_days, missed, details = normalize_todo_weekly_metadata(payload, details)
         raw_due_date = payload.get("dueDate")
         due_date = str(raw_due_date).strip() if raw_due_date is not None else ""
         due_date = due_date or None
@@ -1096,8 +1389,8 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             final_sort_order = sort_order if sort_order else self.next_sort_order(connection, user["id"], lane)
             connection.execute(
                 """
-                INSERT INTO todos (id, user_id, title, details, subtasks, due_date, lane, sort_order, priority, done, daily, daily_completed_on, streak, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                INSERT INTO todos (id, user_id, title, details, subtasks, due_date, lane, sort_order, priority, done, daily, daily_completed_on, streak, project_id, project_title, weekly_days, missed, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     todo_id,
@@ -1112,6 +1405,10 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                     daily,
                     daily_completed_on,
                     streak,
+                    project_id,
+                    project_title,
+                    json.dumps(weekly_days),
+                    1 if missed else 0,
                     timestamp,
                     timestamp,
                 ),
@@ -1128,6 +1425,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
 
         title = str(payload.get("title", "")).strip()
         details = str(payload.get("details", "")).strip()
+        project_id, project_title, weekly_days, missed, details = normalize_todo_weekly_metadata(payload, details)
         raw_due_date = payload.get("dueDate")
         due_date = str(raw_due_date).strip() if raw_due_date is not None else ""
         due_date = due_date or None
@@ -1179,7 +1477,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             connection.execute(
                 """
                 UPDATE todos
-                SET title = ?, details = ?, subtasks = ?, due_date = ?, lane = ?, sort_order = ?, priority = ?, done = ?, daily = ?, daily_completed_on = ?, streak = ?, updated_at = ?
+                SET title = ?, details = ?, subtasks = ?, due_date = ?, lane = ?, sort_order = ?, priority = ?, done = ?, daily = ?, daily_completed_on = ?, streak = ?, project_id = ?, project_title = ?, weekly_days = ?, missed = ?, updated_at = ?
                 WHERE id = ? AND user_id = ?
                 """,
                 (
@@ -1194,6 +1492,10 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                     daily,
                     daily_completed_on,
                     streak,
+                    project_id,
+                    project_title,
+                    json.dumps(weekly_days),
+                    1 if missed else 0,
                     now_iso(),
                     todo_id,
                     user["id"],
@@ -1357,7 +1659,7 @@ def run() -> None:
     host = os.getenv("PLANBOARD_HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "4173"))
     server = ThreadingHTTPServer((host, port), PlanboardHandler)
-    print(f"Planboard Sync running at http://127.0.0.1:{port}")
+    print(f"planner. running at http://127.0.0.1:{port}")
     server.serve_forever()
 
 

@@ -90,7 +90,7 @@
   function deadlineTodosByDate(todos) {
     const map = new Map();
     (todos || [])
-      .filter((todo) => todo.dueDate && !todo.daily)
+      .filter((todo) => todo.dueDate && !todo.daily && !todo.projectTitle && !todo.projectId)
       .forEach((todo) => {
         const list = map.get(todo.dueDate) || [];
         list.push(todo);

@@ -1,6 +1,6 @@
 {
-  "appId": "com.planboard.sync",
-  "productName": "Planboard Sync",
+  "appId": "com.planner.sync",
+  "productName": "planner.",
   "directories": {
     "output": "dist-electron"
   },
@@ -10,6 +10,7 @@
     "package.json"
   ],
   "win": {
+    "icon": "icons/icon.ico",
     "target": [
       "portable",
       "nsis"

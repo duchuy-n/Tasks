@@ -1,7 +1,7 @@
 /** @type {import('@capacitor/cli').CapacitorConfig} */
 module.exports = {
-  appId: "com.planboard.sync",
-  appName: "Planboard Sync",
+  appId: "com.planner.sync",
+  appName: "planner.",
   webDir: "native-web",
   bundledWebRuntime: false,
 };

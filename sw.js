@@ -5,14 +5,18 @@ const APP_SHELL = [
   "./index.html",
   "./styles.css",
   "./planboard-domain.js",
+  "./planner-utils.js",
   "./portfolio-utils.js",
   "./planboard-api-client.js",
   "./app.js",
   "./firebase-adapter.js",
   "./config.js",
   "./manifest.webmanifest",
-  "./icons/icon-any.svg",
-  "./icons/icon-maskable.svg",
+  "./icons/icon-any.svg?v=planner-aurora-2",
+  "./icons/icon-maskable.svg?v=planner-aurora-2",
+  "./icons/icon-192.png?v=planner-aurora-2",
+  "./icons/icon-512.png?v=planner-aurora-2",
+  "./icons/icon-maskable-512.png?v=planner-aurora-2",
 ];
 
 self.addEventListener("install", (event) => {

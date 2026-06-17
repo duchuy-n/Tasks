@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
 import threading
 import unittest
 from uuid import uuid4
@@ -16,8 +17,8 @@ import server
 
 class PlanboardServerTest(unittest.TestCase):
     def setUp(self) -> None:
-        temp_root = Path(__file__).resolve().parents[1] / ".test-data"
-        temp_root.mkdir(exist_ok=True)
+        temp_root = Path(tempfile.gettempdir()) / "planboard-test-data"
+        temp_root.mkdir(parents=True, exist_ok=True)
         self.temp_path = temp_root / str(uuid4())
         self.temp_path.mkdir()
         self.previous_data_dir = server.DATA_DIR
@@ -163,6 +164,96 @@ class PlanboardServerTest(unittest.TestCase):
         )
         self.assertEqual(status, HTTPStatus.BAD_REQUEST)
         self.assertEqual(payload["error"], "Daily tasks cannot be reordered.")
+
+    def test_weekly_todo_metadata_uses_explicit_fields(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Weekly Todo User", "email": "weekly-todo@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos",
+            {
+                "title": "Read chapter",
+                "details": "Plain note",
+                "lane": "ideas",
+                "priority": "medium",
+                "projectId": "project-1",
+                "projectTitle": "Exam prep",
+                "weeklyDays": ["2026-06-15", "2026-06-16"],
+                "missed": True,
+                "subtasks": [{"id": "sub-1", "text": "pages 1-10", "days": ["2026-06-15"], "done": False}],
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        todo = payload["todo"]
+        self.assertEqual(todo["details"], "Plain note")
+        self.assertEqual(todo["projectId"], "project-1")
+        self.assertEqual(todo["projectTitle"], "Exam prep")
+        self.assertEqual(todo["weeklyDays"], ["2026-06-15", "2026-06-16"])
+        self.assertTrue(todo["missed"])
+
+    def test_legacy_weekly_markers_are_migrated(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Legacy Weekly User", "email": "legacy-weekly@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos",
+            {
+                "title": "Legacy task",
+                "details": "[[weekly-days:2026-06-15]][[project-id:p1]][[project:Legacy Project]][[missed:1]] Actual note",
+                "lane": "ideas",
+                "priority": "medium",
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        todo = payload["todo"]
+        self.assertEqual(todo["details"], "Actual note")
+        self.assertEqual(todo["projectId"], "p1")
+        self.assertEqual(todo["projectTitle"], "Legacy Project")
+        self.assertEqual(todo["weeklyDays"], ["2026-06-15"])
+        self.assertTrue(todo["missed"])
+
+    def test_weekly_project_flow(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Weekly User", "email": "weekly@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+
+        status, _, payload = self.request("POST", "/api/weekly-projects", {"title": "Contest prep"}, token=token)
+        self.assertEqual(status, HTTPStatus.CREATED)
+        project_id = payload["weeklyProject"]["id"]
+        self.assertEqual(payload["weeklyProject"]["title"], "Contest prep")
+
+        status, _, payload = self.request("GET", "/api/bootstrap", token=token)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["weeklyProjects"][0]["id"], project_id)
+        self.assertEqual(payload["portfolioItems"], [])
+
+        status, _, payload = self.request("PUT", f"/api/weekly-projects/{project_id}", {"title": "Olympiad prep"}, token=token)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["weeklyProject"]["title"], "Olympiad prep")
+
+        status, _, _ = self.request("DELETE", f"/api/weekly-projects/{project_id}", token=token)
+        self.assertEqual(status, HTTPStatus.OK)
+        status, _, payload = self.request("GET", "/api/bootstrap", token=token)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["weeklyProjects"], [])
 
     def test_portfolio_flow(self) -> None:
         status, _, payload = self.request(
