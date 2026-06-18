@@ -4642,6 +4642,20 @@ function cloneTodoDraft(todo) {
   };
 }
 
+function syncDraftDoneFromSubtasks(draft) {
+  if (!draft || draft.daily || draft.projectTitle) {
+    return draft;
+  }
+  const subtasks = Array.isArray(draft.subtasks) ? draft.subtasks : [];
+  if (!subtasks.length) {
+    return draft;
+  }
+  return {
+    ...draft,
+    done: subtasks.every((item) => Boolean(item.done)),
+  };
+}
+
 function updateDetailDraft(patch) {
   if (!state.detailDraft) {
     return;
@@ -4720,6 +4734,7 @@ function updateDetailSubtask(id, patch) {
     ...state.detailDraft,
     subtasks: (state.detailDraft.subtasks || []).map((item) => item.id === id ? { ...item, ...patch } : item),
   };
+  state.detailDraft = syncDraftDoneFromSubtasks(state.detailDraft);
   state.detailDirty = true;
   renderTaskDetail();
   scheduleDetailSave();
@@ -4733,6 +4748,7 @@ function removeDetailSubtask(id) {
     ...state.detailDraft,
     subtasks: (state.detailDraft.subtasks || []).filter((item) => item.id !== id),
   };
+  state.detailDraft = syncDraftDoneFromSubtasks(state.detailDraft);
   state.detailDirty = true;
   renderTaskDetail();
   scheduleDetailSave();
@@ -4770,6 +4786,7 @@ function addDetailSubtask() {
       { id: crypto.randomUUID ? crypto.randomUUID() : `sub-${Date.now()}`, text, done: false, days: [] },
     ],
   };
+  state.detailDraft = syncDraftDoneFromSubtasks(state.detailDraft);
   detailSubtaskInput.value = "";
   state.detailDirty = true;
   renderTaskDetail();
