@@ -571,7 +571,19 @@ function bindEvents() {
   openComposerButton.addEventListener("click", () => {
     openComposer(composerTabForActiveView(), { locked: true });
   });
-  todoLaneInput.addEventListener("change", syncTaskDateByLane);
+  todoLaneInput.addEventListener("change", () => {
+    if (todoLaneInput.value === "daily") {
+      todoDailyInput.checked = true;
+    }
+    syncTaskDateByLane();
+  });
+  todoDailyInput.addEventListener("change", () => {
+    if (todoDailyInput.checked) {
+      todoLaneInput.value = "daily";
+    } else if (todoLaneInput.value === "daily") {
+      todoLaneInput.value = "";
+    }
+  });
 
   Object.entries(filterButtons).forEach(([mode, button]) => {
     button.addEventListener("click", () => {
@@ -778,7 +790,7 @@ function bindEvents() {
     try {
       const editingId = taskEditorId.value;
       setStatus(editingId ? "Updating task..." : "Adding task...");
-      const isDaily = formData.get("daily") === "on";
+      const isDaily = formData.get("daily") === "on" || formData.get("lane") === "daily";
       const dueDate = normalizeIsoDateInput(String(formData.get("dueDate") || "").trim()) || null;
       const requestedLane = inferStartingLane(String(formData.get("lane") || ""), dueDate, isDaily);
       const payload = await api(editingId ? `/todos/${editingId}` : "/todos", {
