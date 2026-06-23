@@ -2036,7 +2036,7 @@ function todoScheduledForWeek(todo, firstIso, lastIso) {
   if (weeklySlotsForTodo(todo, weeklyDates(firstIso).map(dateToLocalIso)).length) return true;
   if (!todo.projectTitle) return false;
   if (unassignedWeeklySubtaskUnits(todo).length) return true;
-  return !(todo.subtasks || []).length && !weeklyTaskHasAssignments(todo);
+  return !todo.done && !(todo.subtasks || []).length && !weeklyTaskHasAssignments(todo);
 }
 
 function renderWeekly() {
@@ -2455,7 +2455,12 @@ async function createWeeklyProject(title) {
 }
 
 function renderWeeklyProjects(weeklyTasks) {
-  const projects = weeklyProjectItems();
+  const projects = weeklyProjectItems().filter((project) => {
+    const tasks = weeklyTasks.filter((todo) => todoProjectMatches(todo, project));
+    if (tasks.length) return true;
+    const relatedTodos = state.todos.filter((todo) => todoProjectMatches(todo, project));
+    return !relatedTodos.length || relatedTodos.some((todo) => !isTodoEffectivelyDone(todo));
+  });
   const allDates = weeklyDates();
   const firstIso = dateToLocalIso(allDates[0]);
   const lastIso = dateToLocalIso(allDates[6]);
@@ -3445,11 +3450,18 @@ async function endCurrentWeek() {
       return;
     }
 
-    const deletedTodoIds = new Set();
     await Promise.all(tasks.map(async (todo) => {
       if (todo.done || todoSubtasksComplete(todo)) {
-        await api(`/todos/${todo.id}`, { method: "DELETE" });
-        deletedTodoIds.add(todo.id);
+        const completedTodo = {
+          ...todo,
+          done: true,
+          lane: "done",
+          dueDate: null,
+          weeklyDays: [],
+          subtasks: [],
+          missed: false,
+        };
+        await api(`/todos/${todo.id}`, { method: "PUT", body: serializeTodoForApi(completedTodo) });
         return;
       }
       const currentWeeklyDays = todoArchiveDaysForWeek(todo, firstIso, lastIso);
@@ -3491,21 +3503,6 @@ async function endCurrentWeek() {
       });
       await api(`/todos/${todo.id}`, { method: "PUT", body: serializeTodoForApi(nextTodo) });
     }));
-    const remainingTodos = state.todos.filter((todo) => !deletedTodoIds.has(todo.id));
-    const emptiedProjectIds = new Set();
-    const emptiedProjectTitles = new Set();
-    tasks
-      .filter((todo) => deletedTodoIds.has(todo.id))
-      .forEach((todo) => {
-        if (todo.projectId) emptiedProjectIds.add(todo.projectId);
-        else if (todo.projectTitle) emptiedProjectTitles.add(String(todo.projectTitle).trim().toLowerCase());
-      });
-    const emptyProjects = state.weeklyProjects.filter((project) => {
-      const projectTitle = String(project.title || "").trim().toLowerCase();
-      const touched = emptiedProjectIds.has(project.id) || emptiedProjectTitles.has(projectTitle);
-      return touched && !remainingTodos.some((todo) => todoProjectMatches(todo, project));
-    });
-    await Promise.all(emptyProjects.map((project) => api(`/weekly-projects/${project.id}`, { method: "DELETE" })));
     state.selectedDate = addDaysIso(firstIso, 7);
     state.weeklyPanel = "planner";
     state.weeklyFocusDate = "";

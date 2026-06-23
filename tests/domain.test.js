@@ -142,6 +142,17 @@ test("weekly scheduling keeps genuinely unassigned project work visible", () => 
   assert.equal(domain.todoScheduledForWeek(emptyTask, "2026-06-22", "2026-06-28"), true);
 });
 
+test("completed project work cleared from weekly planning stays off weekly", () => {
+  const completed = {
+    projectTitle: "Exam prep",
+    weeklyDays: [],
+    subtasks: [],
+    done: true,
+  };
+
+  assert.equal(domain.todoScheduledForWeek(completed, "2026-06-29", "2026-07-05"), false);
+});
+
 test("all subtasks complete marks the parent task complete", () => {
   assert.equal(domain.todoSubtasksComplete({ subtasks: [] }), false);
   assert.equal(domain.todoSubtasksComplete({ subtasks: [{ done: true }, { done: true }] }), true);

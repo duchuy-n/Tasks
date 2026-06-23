@@ -124,6 +124,7 @@
 
   function todoHasUnassignedWeeklyWork(todo) {
     if (!todo || !todo.projectTitle) return false;
+    if (todo.done) return false;
     const subtasks = Array.isArray(todo.subtasks) ? todo.subtasks : [];
     if (subtasks.some((subtask) => !(subtask.days || []).some((day) => Boolean(validIsoDay(day))))) {
       return true;
