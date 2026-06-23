@@ -106,6 +106,31 @@ service cloud.firestore {
         && isTimestampText(request.resource.data.updatedAt);
     }
 
+    function validWeeklyArchive(archiveId) {
+      return request.resource.data.keys().hasOnly(['id', 'label', 'completed', 'total', 'carried', 'missed', 'progress', 'days', 'tasks', 'createdAt'])
+        && request.resource.data.id == archiveId
+        && request.resource.data.label is string
+        && request.resource.data.label.size() >= 1
+        && request.resource.data.label.size() <= 160
+        && request.resource.data.completed is int
+        && request.resource.data.total is int
+        && request.resource.data.carried is int
+        && request.resource.data.missed is int
+        && request.resource.data.progress is int
+        && request.resource.data.completed >= 0
+        && request.resource.data.total >= request.resource.data.completed
+        && request.resource.data.carried >= 0
+        && request.resource.data.carried <= request.resource.data.total
+        && request.resource.data.missed >= 0
+        && request.resource.data.progress >= 0
+        && request.resource.data.progress <= 100
+        && request.resource.data.days is list
+        && request.resource.data.days.size() <= 7
+        && request.resource.data.tasks is list
+        && request.resource.data.tasks.size() <= 256
+        && isTimestampText(request.resource.data.createdAt);
+    }
+
     function validTodo(todoId) {
       return request.resource.data.keys().hasOnly(['id', 'title', 'details', 'subtasks', 'dueDate', 'lane', 'sortOrder', 'priority', 'done', 'daily', 'dailyCompletedOn', 'streak', 'projectId', 'projectTitle', 'weeklyDays', 'missed', 'createdAt', 'updatedAt'])
         && request.resource.data.id == todoId
@@ -160,6 +185,12 @@ service cloud.firestore {
         allow read, delete: if isOwner(userId);
         allow create: if isOwner(userId) && validWeeklyProject(projectId);
         allow update: if isOwner(userId) && validWeeklyProject(projectId) && createdAtUnchanged();
+      }
+
+      match /weeklyArchives/{archiveId} {
+        allow read, delete: if isOwner(userId);
+        allow create: if isOwner(userId) && validWeeklyArchive(archiveId);
+        allow update: if isOwner(userId) && validWeeklyArchive(archiveId);
       }
 
       match /portfolio/{itemId} {

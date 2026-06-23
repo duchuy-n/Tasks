@@ -96,6 +96,10 @@
     return client.firestoreMod.collection(client.db, "users", uid, "weeklyProjects");
   }
 
+  function weeklyArchivesRef(client, uid) {
+    return client.firestoreMod.collection(client.db, "users", uid, "weeklyArchives");
+  }
+
   function todosRef(client, uid) {
     return client.firestoreMod.collection(client.db, "users", uid, "todos");
   }
@@ -114,6 +118,10 @@
 
   function weeklyProjectDocRef(client, uid, projectId) {
     return client.firestoreMod.doc(client.db, "users", uid, "weeklyProjects", projectId);
+  }
+
+  function weeklyArchiveDocRef(client, uid, archiveId) {
+    return client.firestoreMod.doc(client.db, "users", uid, "weeklyArchives", archiveId);
   }
 
   function todoDocRef(client, uid, todoId) {
@@ -348,6 +356,56 @@
     };
   }
 
+  function normalizeWeeklyArchivePayload(body = {}, existing = {}) {
+    const label = String(body.label || "").trim();
+    const readCount = (key, maximum = 100000) => {
+      const value = Number(body[key] || 0);
+      if (!Number.isInteger(value) || value < 0 || value > maximum) {
+        throw createError(`Archive ${key} is invalid.`, 400);
+      }
+      return value;
+    };
+    if (!label || label.length > 160) {
+      throw createError("Archive label is invalid.", 400);
+    }
+    const completed = readCount("completed");
+    const total = readCount("total");
+    const carried = readCount("carried");
+    const missed = readCount("missed");
+    const progress = readCount("progress", 100);
+    if (completed > total || carried > total) {
+      throw createError("Archive counts are invalid.", 400);
+    }
+    if (!Array.isArray(body.days) || !Array.isArray(body.tasks)) {
+      throw createError("Archive data is invalid.", 400);
+    }
+    const days = body.days.slice(0, 7).map((entry) => {
+      const dayTotal = Number(entry?.total || 0);
+      const dayDone = Number(entry?.done || 0);
+      if (!Number.isInteger(dayTotal) || !Number.isInteger(dayDone) || dayTotal < 0 || dayDone < 0 || dayDone > dayTotal) {
+        throw createError("Archive days are invalid.", 400);
+      }
+      return { total: dayTotal, done: dayDone };
+    });
+    const tasks = body.tasks.slice(0, 256).map((entry) => ({
+      title: String(entry?.title || "").trim().slice(0, 160),
+      done: Boolean(entry?.done),
+      projectId: String(entry?.projectId || "").trim().slice(0, 160),
+      projectTitle: String(entry?.projectTitle || "").trim().slice(0, 160),
+    }));
+    return {
+      label,
+      completed,
+      total,
+      carried,
+      missed,
+      progress,
+      days,
+      tasks,
+      createdAt: String(existing.createdAt || body.createdAt || nowIso()),
+    };
+  }
+
   function compareCreatedDesc(left, right) {
     return String(right.createdAt || "").localeCompare(String(left.createdAt || ""));
   }
@@ -414,6 +472,22 @@
       title: String(data.title || ""),
       createdAt: String(data.createdAt || ""),
       updatedAt: String(data.updatedAt || ""),
+    };
+  }
+
+  function serializeWeeklyArchiveDoc(snapshot) {
+    const data = snapshot.data() || {};
+    return {
+      id: snapshot.id,
+      label: String(data.label || ""),
+      completed: Number(data.completed || 0),
+      total: Number(data.total || 0),
+      carried: Number(data.carried || 0),
+      missed: Number(data.missed || 0),
+      progress: Number(data.progress || 0),
+      days: Array.isArray(data.days) ? data.days : [],
+      tasks: Array.isArray(data.tasks) ? data.tasks : [],
+      createdAt: String(data.createdAt || ""),
     };
   }
 
@@ -509,11 +583,12 @@
   }
 
   async function getBootstrapPayload(client, user) {
-    const [userSnapshot, noteSnapshots, planSnapshots, weeklyProjectSnapshots, portfolioSnapshots, todoSnapshots] = await Promise.all([
+    const [userSnapshot, noteSnapshots, planSnapshots, weeklyProjectSnapshots, weeklyArchiveSnapshots, portfolioSnapshots, todoSnapshots] = await Promise.all([
       client.firestoreMod.getDoc(userRef(client, user.uid)),
       client.firestoreMod.getDocs(notesRef(client, user.uid)),
       client.firestoreMod.getDocs(plansRef(client, user.uid)),
       client.firestoreMod.getDocs(weeklyProjectsRef(client, user.uid)),
+      client.firestoreMod.getDocs(weeklyArchivesRef(client, user.uid)),
       client.firestoreMod.getDocs(portfolioRef(client, user.uid)),
       client.firestoreMod.getDocs(todosRef(client, user.uid)),
     ]);
@@ -541,6 +616,11 @@
         String(left.title || "").localeCompare(String(right.title || ""))
       );
 
+    const weeklyArchives = weeklyArchiveSnapshots.docs
+      .map(serializeWeeklyArchiveDoc)
+      .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
+      .slice(0, 52);
+
     const portfolioItems = portfolioSnapshots.docs
       .map(serializePortfolioDoc)
       .sort(comparePortfolioItems);
@@ -558,6 +638,7 @@
       notes,
       plans,
       weeklyProjects,
+      weeklyArchives,
       portfolioItems,
       todos,
     };
@@ -587,6 +668,11 @@
         String(left.title || "").localeCompare(String(right.title || ""))
       );
 
+    const weeklyArchives = snapshots.weeklyArchives.docs
+      .map(serializeWeeklyArchiveDoc)
+      .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
+      .slice(0, 52);
+
     const portfolioItems = snapshots.portfolio.docs
       .map(serializePortfolioDoc)
       .sort(comparePortfolioItems);
@@ -604,6 +690,7 @@
       notes,
       plans,
       weeklyProjects,
+      weeklyArchives,
       portfolioItems,
       todos,
     };
@@ -897,6 +984,48 @@
     return { ok: true };
   }
 
+  async function handleCreateWeeklyArchive(client, options) {
+    const body = requireBody(options);
+    const user = await requireUser(client);
+    const requestedId = String(body.id || "").trim();
+    const archiveId = /^[A-Za-z0-9_-]{1,120}$/.test(requestedId) ? requestedId : client.firestoreMod.doc(weeklyArchivesRef(client, user.uid)).id;
+    const ref = weeklyArchiveDocRef(client, user.uid, archiveId);
+    const existing = await client.firestoreMod.getDoc(ref);
+    const weeklyArchive = {
+      id: archiveId,
+      ...normalizeWeeklyArchivePayload(body, existing.exists() ? existing.data() || {} : {}),
+    };
+    await client.firestoreMod.setDoc(ref, weeklyArchive);
+    const snapshots = await client.firestoreMod.getDocs(weeklyArchivesRef(client, user.uid));
+    const excess = snapshots.docs
+      .map(serializeWeeklyArchiveDoc)
+      .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
+      .slice(52);
+    if (excess.length) {
+      const batch = client.firestoreMod.writeBatch(client.db);
+      excess.forEach((archive) => batch.delete(weeklyArchiveDocRef(client, user.uid, archive.id)));
+      await batch.commit();
+    }
+    return { weeklyArchive };
+  }
+
+  async function handleDeleteWeeklyArchive(client, archiveId) {
+    const user = await requireUser(client);
+    await client.firestoreMod.deleteDoc(weeklyArchiveDocRef(client, user.uid, archiveId));
+    return { ok: true };
+  }
+
+  async function handleClearWeeklyArchives(client) {
+    const user = await requireUser(client);
+    const snapshots = await client.firestoreMod.getDocs(weeklyArchivesRef(client, user.uid));
+    for (let index = 0; index < snapshots.docs.length; index += 450) {
+      const batch = client.firestoreMod.writeBatch(client.db);
+      snapshots.docs.slice(index, index + 450).forEach((snapshot) => batch.delete(snapshot.ref));
+      await batch.commit();
+    }
+    return { ok: true };
+  }
+
   async function handleCreateTodo(client, options) {
     const body = requireBody(options);
     const title = String(body.title || "").trim();
@@ -1137,6 +1266,7 @@
       notesRef(client, user.uid),
       plansRef(client, user.uid),
       weeklyProjectsRef(client, user.uid),
+      weeklyArchivesRef(client, user.uid),
       portfolioRef(client, user.uid),
       todosRef(client, user.uid),
     ];
@@ -1184,6 +1314,12 @@
       if (path === "/weekly-projects" && (options.method || "GET") === "POST") {
         return handleCreateWeeklyProject(client, options);
       }
+      if (path === "/weekly-archives" && (options.method || "GET") === "POST") {
+        return handleCreateWeeklyArchive(client, options);
+      }
+      if (path === "/weekly-archives" && (options.method || "GET") === "DELETE") {
+        return handleClearWeeklyArchives(client);
+      }
       if (path === "/portfolio" && (options.method || "GET") === "POST") {
         return handleCreatePortfolioItem(client, options);
       }
@@ -1203,6 +1339,7 @@
       const noteMatch = /^\/notes\/(\d{4}-\d{2}-\d{2})$/.exec(path);
       const planMatch = /^\/plans\/([A-Za-z0-9_-]+)$/.exec(path);
       const weeklyProjectMatch = /^\/weekly-projects\/([A-Za-z0-9_-]+)$/.exec(path);
+      const weeklyArchiveMatch = /^\/weekly-archives\/([A-Za-z0-9_-]+)$/.exec(path);
       const portfolioMatch = /^\/portfolio\/([A-Za-z0-9_-]+)$/.exec(path);
       const todoLaneMatch = /^\/todos\/([A-Za-z0-9_-]+)\/lane\/(ideas|month|week|today|done)$/.exec(path);
       const todoMatch = /^\/todos\/([A-Za-z0-9_-]+)$/.exec(path);
@@ -1221,6 +1358,9 @@
       }
       if (weeklyProjectMatch && (options.method || "GET") === "DELETE") {
         return handleDeleteWeeklyProject(client, weeklyProjectMatch[1]);
+      }
+      if (weeklyArchiveMatch && (options.method || "GET") === "DELETE") {
+        return handleDeleteWeeklyArchive(client, weeklyArchiveMatch[1]);
       }
       if (portfolioMatch && (options.method || "GET") === "PUT") {
         return handleUpdatePortfolioItem(client, portfolioMatch[1], options);
@@ -1257,12 +1397,13 @@
       notes: null,
       plans: null,
       weeklyProjects: null,
+      weeklyArchives: null,
       portfolio: null,
       todos: null,
     };
     const unsubscriptions = [];
     const emitIfReady = () => {
-      if (snapshots.user && snapshots.notes && snapshots.plans && snapshots.weeklyProjects && snapshots.portfolio && snapshots.todos) {
+      if (snapshots.user && snapshots.notes && snapshots.plans && snapshots.weeklyProjects && snapshots.weeklyArchives && snapshots.portfolio && snapshots.todos) {
         onPayload(serializeBootstrapSnapshots(user, snapshots));
       }
     };
@@ -1293,6 +1434,12 @@
     unsubscriptions.push(
       client.firestoreMod.onSnapshot(weeklyProjectsRef(client, user.uid), (snapshot) => {
         snapshots.weeklyProjects = snapshot;
+        emitIfReady();
+      }, handleError)
+    );
+    unsubscriptions.push(
+      client.firestoreMod.onSnapshot(weeklyArchivesRef(client, user.uid), (snapshot) => {
+        snapshots.weeklyArchives = snapshot;
         emitIfReady();
       }, handleError)
     );

@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
-from hashlib import pbkdf2_hmac
+from hashlib import pbkdf2_hmac, sha256
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -161,6 +161,21 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS weekly_archives (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                label TEXT NOT NULL,
+                completed INTEGER NOT NULL,
+                total INTEGER NOT NULL,
+                carried INTEGER NOT NULL,
+                missed INTEGER NOT NULL,
+                progress INTEGER NOT NULL,
+                days TEXT NOT NULL,
+                tasks TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
                 """
             )
             todo_columns = {
@@ -278,6 +293,29 @@ def serialize_weekly_project(row: sqlite3.Row) -> dict:
     }
 
 
+def serialize_weekly_archive(row: sqlite3.Row) -> dict:
+    try:
+        days = json.loads(row["days"] or "[]")
+    except (TypeError, json.JSONDecodeError):
+        days = []
+    try:
+        tasks = json.loads(row["tasks"] or "[]")
+    except (TypeError, json.JSONDecodeError):
+        tasks = []
+    return {
+        "id": row["id"],
+        "label": row["label"],
+        "completed": row["completed"],
+        "total": row["total"],
+        "carried": row["carried"],
+        "missed": row["missed"],
+        "progress": row["progress"],
+        "days": days if isinstance(days, list) else [],
+        "tasks": tasks if isinstance(tasks, list) else [],
+        "createdAt": row["created_at"],
+    }
+
+
 def row_value(row: sqlite3.Row, key: str, fallback=None):
     return row[key] if key in row.keys() else fallback
 
@@ -360,6 +398,77 @@ def is_valid_time(value: str) -> bool:
     hour = int(match.group(1))
     minute = int(match.group(2))
     return 0 <= hour <= 23 and 0 <= minute <= 59
+
+
+def normalize_weekly_archive(payload: dict) -> dict:
+    archive_id = str(payload.get("id") or uuid4()).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", archive_id):
+        raise ValueError("Archive id is invalid.")
+    label = str(payload.get("label", "")).strip()
+    if not label or len(label) > MAX_TITLE_LENGTH:
+        raise ValueError("Archive label is invalid.")
+
+    def count(name: str, maximum: int = 100000) -> int:
+        try:
+            value = int(payload.get(name, 0))
+        except (TypeError, ValueError):
+            raise ValueError(f"Archive {name} is invalid.")
+        if value < 0 or value > maximum:
+            raise ValueError(f"Archive {name} is invalid.")
+        return value
+
+    completed = count("completed")
+    total = count("total")
+    carried = count("carried")
+    missed = count("missed")
+    progress = count("progress", 100)
+    if completed > total or carried > total:
+        raise ValueError("Archive counts are invalid.")
+
+    raw_days = payload.get("days", [])
+    if not isinstance(raw_days, list):
+        raise ValueError("Archive days are invalid.")
+    days = []
+    for raw_day in raw_days[:7]:
+        if not isinstance(raw_day, dict):
+            raise ValueError("Archive days are invalid.")
+        try:
+            day_total = int(raw_day.get("total", 0))
+            day_done = int(raw_day.get("done", 0))
+        except (TypeError, ValueError):
+            raise ValueError("Archive days are invalid.")
+        if day_total < 0 or day_done < 0 or day_done > day_total or day_total > 100000:
+            raise ValueError("Archive days are invalid.")
+        days.append({"total": day_total, "done": day_done})
+
+    raw_tasks = payload.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        raise ValueError("Archive tasks are invalid.")
+    tasks = []
+    for raw_task in raw_tasks[:256]:
+        if not isinstance(raw_task, dict):
+            raise ValueError("Archive tasks are invalid.")
+        tasks.append({
+            "title": str(raw_task.get("title", "")).strip()[:MAX_TITLE_LENGTH],
+            "done": bool(raw_task.get("done")),
+            "projectId": str(raw_task.get("projectId", "")).strip()[:MAX_TITLE_LENGTH],
+            "projectTitle": str(raw_task.get("projectTitle", "")).strip()[:MAX_TITLE_LENGTH],
+        })
+    created_at = str(payload.get("createdAt") or now_iso()).strip()
+    if len(created_at) < 10 or len(created_at) > 40:
+        created_at = now_iso()
+    return {
+        "id": archive_id,
+        "label": label,
+        "completed": completed,
+        "total": total,
+        "carried": carried,
+        "missed": missed,
+        "progress": progress,
+        "days": days,
+        "tasks": tasks,
+        "createdAt": created_at,
+    }
 
 
 def normalize_subtasks(value: object) -> list[dict]:
@@ -637,11 +746,21 @@ def bootstrap_payload(connection: sqlite3.Connection, user_id: str, user_row: sq
         """,
         (user_id,),
     ).fetchall()
+    weekly_archives = connection.execute(
+        """
+        SELECT * FROM weekly_archives
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT 52
+        """,
+        (user_id,),
+    ).fetchall()
     return {
         "user": serialize_user(user_row),
         "notes": [serialize_note(row) for row in notes],
         "plans": [serialize_plan(row) for row in plans],
         "weeklyProjects": [serialize_weekly_project(row) for row in weekly_projects],
+        "weeklyArchives": [serialize_weekly_archive(row) for row in weekly_archives],
         "todos": [serialize_todo(row) for row in todos],
         "portfolioItems": [serialize_portfolio_item(row) for row in portfolio_items],
     }
@@ -713,6 +832,9 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         if route == "/api/weekly-projects":
             self.handle_create_weekly_project()
             return
+        if route == "/api/weekly-archives":
+            self.handle_create_weekly_archive()
+            return
         if route == "/api/portfolio":
             self.handle_create_portfolio_item()
             return
@@ -753,6 +875,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         route = self.route_path()
         plan_match = re.fullmatch(r"/api/plans/([a-f0-9-]+)", route)
         weekly_project_match = re.fullmatch(r"/api/weekly-projects/([a-f0-9-]+)", route)
+        weekly_archive_match = re.fullmatch(r"/api/weekly-archives/([A-Za-z0-9_-]+)", route)
         portfolio_match = re.fullmatch(r"/api/portfolio/([a-f0-9-]+)", route)
         todo_match = re.fullmatch(r"/api/todos/([a-f0-9-]+)", route)
         if plan_match:
@@ -760,6 +883,12 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
         if weekly_project_match:
             self.handle_delete_weekly_project(weekly_project_match.group(1))
+            return
+        if route == "/api/weekly-archives":
+            self.handle_clear_weekly_archives()
+            return
+        if weekly_archive_match:
+            self.handle_delete_weekly_archive(weekly_archive_match.group(1))
             return
         if portfolio_match:
             self.handle_delete_portfolio_item(portfolio_match.group(1))
@@ -955,7 +1084,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         except PermissionError:
             return
         with connection:
-            for table in ("daily_notes", "plans", "weekly_projects", "portfolio_items", "todos"):
+            for table in ("daily_notes", "plans", "weekly_projects", "weekly_archives", "portfolio_items", "todos"):
                 connection.execute(f"DELETE FROM {table} WHERE user_id = ?", (user["id"],))
         connection.close()
         self.respond_json({"ok": True})
@@ -1200,6 +1329,84 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                 "DELETE FROM weekly_projects WHERE id = ? AND user_id = ?",
                 (project_id, user["id"]),
             )
+        connection.close()
+        self.respond_json({"ok": True})
+
+    def handle_create_weekly_archive(self) -> None:
+        try:
+            archive = normalize_weekly_archive(self.parse_json())
+        except ValueError as error:
+            self.respond_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            connection, user = self.auth_user()
+        except PermissionError:
+            return
+        with connection:
+            existing = connection.execute(
+                "SELECT user_id FROM weekly_archives WHERE id = ?",
+                (archive["id"],),
+            ).fetchone()
+            if existing and existing["user_id"] != user["id"]:
+                user_suffix = sha256(user["id"].encode("utf-8")).hexdigest()[:16]
+                archive["id"] = f'{archive["id"][:103]}-{user_suffix}'
+            connection.execute(
+                """
+                INSERT INTO weekly_archives (id, user_id, label, completed, total, carried, missed, progress, days, tasks, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    label = excluded.label,
+                    completed = excluded.completed,
+                    total = excluded.total,
+                    carried = excluded.carried,
+                    missed = excluded.missed,
+                    progress = excluded.progress,
+                    days = excluded.days,
+                    tasks = excluded.tasks,
+                    created_at = excluded.created_at
+                """,
+                (
+                    archive["id"], user["id"], archive["label"], archive["completed"], archive["total"],
+                    archive["carried"], archive["missed"], archive["progress"], json.dumps(archive["days"]),
+                    json.dumps(archive["tasks"]), archive["createdAt"],
+                ),
+            )
+            connection.execute(
+                """
+                DELETE FROM weekly_archives
+                WHERE user_id = ? AND id IN (
+                    SELECT id FROM weekly_archives
+                    WHERE user_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT -1 OFFSET 52
+                )
+                """,
+                (user["id"], user["id"]),
+            )
+            row = connection.execute(
+                "SELECT * FROM weekly_archives WHERE id = ? AND user_id = ?",
+                (archive["id"], user["id"]),
+            ).fetchone()
+        connection.close()
+        self.respond_json({"weeklyArchive": serialize_weekly_archive(row)}, HTTPStatus.CREATED)
+
+    def handle_delete_weekly_archive(self, archive_id: str) -> None:
+        try:
+            connection, user = self.auth_user()
+        except PermissionError:
+            return
+        with connection:
+            connection.execute("DELETE FROM weekly_archives WHERE id = ? AND user_id = ?", (archive_id, user["id"]))
+        connection.close()
+        self.respond_json({"ok": True})
+
+    def handle_clear_weekly_archives(self) -> None:
+        try:
+            connection, user = self.auth_user()
+        except PermissionError:
+            return
+        with connection:
+            connection.execute("DELETE FROM weekly_archives WHERE user_id = ?", (user["id"],))
         connection.close()
         self.respond_json({"ok": True})
 

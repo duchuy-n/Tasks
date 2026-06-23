@@ -253,6 +253,7 @@ let statusTimerId = 0;
 let detailSaveTimerId = 0;
 let syncLabelTimerId = 0;
 let undoTimerId = 0;
+let endWeekInFlight = false;
 const dailyStreakResetIds = new Set();
 
 const state = {
@@ -411,10 +412,6 @@ function loadWeeklyProjects(userId = "") {
   }
 }
 
-function saveWeeklyArchives() {
-  localStorage.setItem(weeklyArchiveStorageKey(), JSON.stringify(state.weeklyArchives.slice(0, 52)));
-}
-
 function saveWeeklyProjects() {
   localStorage.setItem(weeklyProjectsStorageKey(), JSON.stringify(state.weeklyProjects));
 }
@@ -428,25 +425,120 @@ function hydrateWeeklyProjectFromServer(project) {
   };
 }
 
+function hydrateWeeklyArchiveFromServer(archive) {
+  const count = (value) => Math.max(0, Number.parseInt(value, 10) || 0);
+  return {
+    id: String(archive?.id || ""),
+    label: String(archive?.label || "").trim(),
+    completed: count(archive?.completed),
+    total: count(archive?.total),
+    carried: count(archive?.carried),
+    missed: count(archive?.missed),
+    progress: Math.min(100, count(archive?.progress)),
+    days: Array.isArray(archive?.days)
+      ? archive.days.slice(0, 7).map((day) => ({ total: count(day?.total), done: count(day?.done) }))
+      : [],
+    tasks: Array.isArray(archive?.tasks)
+      ? archive.tasks.slice(0, 256).map((task) => ({
+        title: String(task?.title || "").trim(),
+        done: Boolean(task?.done),
+        projectId: String(task?.projectId || "").trim(),
+        projectTitle: String(task?.projectTitle || "").trim(),
+      }))
+      : [],
+    createdAt: String(archive?.createdAt || new Date().toISOString()),
+  };
+}
+
+function sortWeeklyArchives(archives) {
+  return [...archives]
+    .filter((archive) => archive?.id && archive?.label)
+    .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
+    .slice(0, 52);
+}
+
+let weeklyProjectMigrationInFlight = false;
+
 async function migrateLocalWeeklyProjects() {
+  if (weeklyProjectMigrationInFlight) return;
   const localProjects = loadWeeklyProjects(state.user?.id || "");
   if (!localProjects.length) return;
-  const existingTitles = new Set(state.weeklyProjects.map((project) => project.title.trim().toLowerCase()));
-  const migrated = [];
-  for (const project of localProjects) {
-    const title = String(project.title || "").trim();
-    if (!title || existingTitles.has(title.toLowerCase())) continue;
+  weeklyProjectMigrationInFlight = true;
+  try {
+    const projectsByTitle = new Map(state.weeklyProjects.map((project) => [project.title.trim().toLowerCase(), project]));
+    const migrated = [];
+    let complete = true;
+    for (const project of localProjects) {
+      const title = String(project.title || "").trim();
+      if (!title) continue;
+      const titleKey = title.toLowerCase();
+      let targetProject = projectsByTitle.get(titleKey);
+      if (!targetProject) {
+        try {
+          const payload = await api("/weekly-projects", { method: "POST", body: { title } });
+          targetProject = hydrateWeeklyProjectFromServer(payload.weeklyProject);
+          projectsByTitle.set(titleKey, targetProject);
+          migrated.push(targetProject);
+        } catch {
+          complete = false;
+          continue;
+        }
+      }
+      const todosToRemap = state.todos.filter((todo) =>
+        String(todo.projectTitle || "").trim().toLowerCase() === titleKey
+        && todo.projectId !== targetProject.id
+      );
+      for (const todo of todosToRemap) {
+        try {
+          const payload = await api(`/todos/${todo.id}`, {
+            method: "PUT",
+            body: serializeTodoForApi({ ...todo, projectId: targetProject.id }),
+          });
+          updateTodo(hydrateTodoFromServer(payload.todo));
+        } catch {
+          complete = false;
+        }
+      }
+    }
+    if (migrated.length) {
+      state.weeklyProjects = [...state.weeklyProjects, ...migrated];
+      render();
+    }
+    if (complete) {
+      localStorage.removeItem(weeklyProjectsStorageKey());
+    }
+  } finally {
+    weeklyProjectMigrationInFlight = false;
+  }
+}
+
+let weeklyArchiveMigrationInFlight = false;
+
+async function migrateLocalWeeklyArchives() {
+  if (weeklyArchiveMigrationInFlight) return;
+  const localArchives = loadWeeklyArchives(state.user?.id || "").map(hydrateWeeklyArchiveFromServer).filter((archive) => archive.id && archive.label);
+  if (!localArchives.length) return;
+  weeklyArchiveMigrationInFlight = true;
+  let migrated = [];
+  let complete = true;
+  const existingIds = new Set(state.weeklyArchives.map((archive) => archive.id));
+  for (const archive of localArchives) {
+    if (existingIds.has(archive.id)) continue;
     try {
-      const payload = await api("/weekly-projects", { method: "POST", body: { title } });
-      migrated.push(hydrateWeeklyProjectFromServer(payload.weeklyProject));
-      existingTitles.add(title.toLowerCase());
-    } catch {}
+      const payload = await api("/weekly-archives", { method: "POST", body: archive });
+      migrated.push(hydrateWeeklyArchiveFromServer(payload.weeklyArchive));
+    } catch {
+      complete = false;
+    }
   }
   if (migrated.length) {
-    state.weeklyProjects = [...state.weeklyProjects, ...migrated];
+    state.weeklyArchives = sortWeeklyArchives([...state.weeklyArchives, ...migrated]);
     render();
   }
-  localStorage.removeItem(weeklyProjectsStorageKey());
+  if (complete) {
+    localStorage.removeItem(weeklyArchiveStorageKey());
+  }
+  weeklyArchiveMigrationInFlight = false;
 }
 
 function clearLocalWorkspaceCaches() {
@@ -525,11 +617,17 @@ function bindEvents() {
   weeklyStatsButton.addEventListener("click", () => setWeeklyPage("stats"));
   weeklyEndButton.addEventListener("click", endCurrentWeek);
   weeklyAddProjectButton.addEventListener("click", addWeeklyProject);
-  weeklyClearArchiveButton.addEventListener("click", () => {
+  weeklyClearArchiveButton.addEventListener("click", async () => {
     if (!state.weeklyArchives.length || !window.confirm("Clear the weekly archive?")) return;
-    state.weeklyArchives = [];
-    saveWeeklyArchives();
-    renderWeekly();
+    try {
+      await api("/weekly-archives", { method: "DELETE" });
+      state.weeklyArchives = [];
+      state.lastSyncedAt = Date.now();
+      renderWeekly();
+      setStatus("Weekly archive cleared.");
+    } catch (error) {
+      setStatus(error.message || "Could not clear the weekly archive.", true);
+    }
   });
   portfolioFilterButtons.forEach((button) => {
     button.addEventListener("click", () => {
@@ -1335,7 +1433,7 @@ function setActiveView(view) {
 
 function applyBootstrap(payload) {
   state.user = payload.user || null;
-  state.weeklyArchives = loadWeeklyArchives(state.user?.id || "");
+  state.weeklyArchives = sortWeeklyArchives((payload.weeklyArchives || []).map(hydrateWeeklyArchiveFromServer));
   state.weeklyProjects = (payload.weeklyProjects || []).map(hydrateWeeklyProjectFromServer).filter((project) => project.id && project.title);
   state.notesByDate = Object.fromEntries((payload.notes || []).map((note) => [note.noteDate, note.content]));
   state.plans = payload.plans || [];
@@ -1353,6 +1451,7 @@ function applyBootstrap(payload) {
   }
   state.lastSyncedAt = Date.now();
   migrateLocalWeeklyProjects().catch(() => {});
+  migrateLocalWeeklyArchives().catch(() => {});
   if (state.detailDirty && state.detailTaskId && state.detailDraft) {
     const exists = state.todos.some((todo) => todo.id === state.detailTaskId);
     if (exists) {
@@ -1729,7 +1828,7 @@ function renderBoard() {
 
 function boardProjectLane(group) {
   const todos = group.todos || [];
-  if (weeklyCompletionForTodos(todos).complete) {
+  if (todos.length && todos.every((todo) => todo.done || todoSubtasksComplete(todo))) {
     return "done";
   }
   return todos.some(weeklyTaskHasAssignments) ? "month" : "ideas";
@@ -1755,9 +1854,14 @@ function weeklyTodoComplete(todo, weekIsoDays = weeklyDates().map(dateToLocalIso
 
 function isTodoEffectivelyDone(todo, weekIsoDays = weeklyDates().map(dateToLocalIso)) {
   if (!todo) return false;
-  if (todo.done) return true;
   if (todo.daily) return isDailyCompletedToday(todo);
+  if (todo.done || todoSubtasksComplete(todo)) return true;
   return Boolean(todo.projectTitle && weeklyTodoComplete(todo, weekIsoDays));
+}
+
+function todoSubtasksComplete(todo) {
+  const subtasks = Array.isArray(todo?.subtasks) ? todo.subtasks : [];
+  return subtasks.length > 0 && subtasks.every((subtask) => Boolean(subtask.done));
 }
 
 function boardEntryTodo(entry) {
@@ -1907,14 +2011,14 @@ function weeklyUnitsForTodo(todo, weekIsoDays = weeklyDates().map(dateToLocalIso
   const slots = weeklySlotsForTodo(todo, weekIsoDays);
   const unassignedUnits = unassignedWeeklySubtaskUnits(todo);
   if (slots.length || unassignedUnits.length) return [...slots, ...unassignedUnits];
-  if (todo.projectTitle) {
+  if (todo.projectTitle && !(todo.subtasks || []).length && !weeklyTaskHasAssignments(todo)) {
     return [{
       id: "",
       todoId: todo.id,
       day: "",
       title: todo.title,
       desc: "",
-      done: Boolean(todo.done),
+      done: Boolean(todo.done || todoSubtasksComplete(todo)),
       projectId: todo.projectId || "",
       projectTitle: todo.projectTitle || "",
     }];
@@ -1930,7 +2034,9 @@ function todoScheduledForWeek(todo, firstIso, lastIso) {
   if (todo.daily) return false;
   if (todoWeeklyDays(todo).some((day) => day >= firstIso && day <= lastIso)) return true;
   if (weeklySlotsForTodo(todo, weeklyDates(firstIso).map(dateToLocalIso)).length) return true;
-  return Boolean(todo.projectTitle);
+  if (!todo.projectTitle) return false;
+  if (unassignedWeeklySubtaskUnits(todo).length) return true;
+  return !(todo.subtasks || []).length && !weeklyTaskHasAssignments(todo);
 }
 
 function renderWeekly() {
@@ -2250,10 +2356,10 @@ async function updateSubtaskFromWeekly(todoId, subtaskId, patch) {
   const todo = state.todos.find((entry) => entry.id === todoId);
   if (!todo) return;
   const previous = cloneTodoDraft(todo);
-  const nextTodo = {
+  const nextTodo = syncDraftDoneFromSubtasks({
     ...todo,
     subtasks: (todo.subtasks || []).map((item) => item.id === subtaskId ? { ...item, ...patch } : item),
-  };
+  });
   try {
     updateTodo(nextTodo);
     render();
@@ -2443,14 +2549,16 @@ function renderWeeklyProjectAddForm() {
 function renderWeeklyProjectTask(todo, dates) {
   const weekIsoDays = dates.map(dateToLocalIso);
   const units = weeklyUnitsForTodo(todo, weekIsoDays);
-  const done = units.filter((unit) => unit.done).length;
+  const total = units.length || 1;
+  const taskDone = isTodoEffectivelyDone(todo, weekIsoDays);
+  const done = taskDone ? total : units.filter((unit) => unit.done).length;
   const row = document.createElement("article");
   row.className = "weekly-project-task";
-  row.classList.toggle("is-done", units.length > 0 && done === units.length);
+  row.classList.toggle("is-done", taskDone);
 
   const check = document.createElement("input");
   check.type = "checkbox";
-  check.checked = Boolean(todo.done);
+  check.checked = taskDone;
   check.setAttribute("aria-label", `Complete ${todo.title}`);
   check.addEventListener("change", async () => {
     const success = await toggleTodoDone(todo.id, check.checked);
@@ -2460,7 +2568,7 @@ function renderWeeklyProjectTask(todo, dates) {
   const body = document.createElement("button");
   body.type = "button";
   body.className = "weekly-project-task__title";
-  body.innerHTML = `<span>${escapeHtml(todo.title)}</span><small>${done}/${units.length || 1}</small>`;
+  body.innerHTML = `<span>${escapeHtml(todo.title)}</span><small>${done}/${total}</small>`;
   body.addEventListener("click", () => openTaskDetail(todo.id));
 
   const dayPicker = document.createElement("div");
@@ -2537,6 +2645,7 @@ function weeklyAssignOverlay() {
 
 function showWeeklyEndModal(label) {
   return new Promise((resolve) => {
+    const openedAt = performance.now();
     let overlay = document.querySelector("#weeklyEndOverlay");
     if (!overlay) {
       overlay = document.createElement("div");
@@ -2565,7 +2674,7 @@ function showWeeklyEndModal(label) {
       resolve(value);
     };
     overlay.onclick = (event) => {
-      if (event.target === overlay) {
+      if (event.target === overlay && performance.now() - openedAt > 300) {
         close(null);
       }
     };
@@ -2640,6 +2749,16 @@ function renderWeeklyAssignModal(force = false) {
   const currentWeekSubtasks = (todo.subtasks || []).filter((subtask) =>
     (subtask.days || []).some((day) => weekIsoDays.includes(normalizeIsoDateInput(day)))
   );
+  const draftChunksByDay = new Map();
+  if (unassignedSubtasks.length) {
+    draftChunksByDay.set(unassignedKey, unassignedSubtasks.map((subtask) => ({ ...subtask, days: [] })));
+  }
+  weekIsoDays.forEach((iso) => {
+    const chunks = currentWeekSubtasks
+      .filter((subtask) => (subtask.days || []).map(normalizeIsoDateInput).includes(iso))
+      .map((subtask) => ({ ...subtask, days: [iso] }));
+    if (chunks.length) draftChunksByDay.set(iso, chunks);
+  });
 
   overlay.innerHTML = "";
   const panel = document.createElement("form");
@@ -2679,29 +2798,25 @@ function renderWeeklyAssignModal(force = false) {
   const chunksWrap = panel.querySelector(".weekly-assign-chunks");
   const subcount = panel.querySelector(".weekly-assign-subcount");
 
-  const readDraftChunks = () => {
-    const drafts = new Map();
-    panel.querySelectorAll(".weekly-assign-chunk").forEach((row) => {
-      const day = normalizeIsoDateInput(row.dataset.day);
+  const captureDraftChunks = () => {
+    panel.querySelectorAll(".weekly-assign-group").forEach((group) => {
+      const day = normalizeIsoDateInput(group.dataset.day);
       const key = day || unassignedKey;
-      const chunk = {
+      const chunks = [...group.querySelectorAll(".weekly-assign-chunk")].map((row) => ({
         id: row.dataset.subtaskId || "",
         text: String(row.querySelector(".weekly-assign-chunk__text")?.value || ""),
         done: row.dataset.done === "true",
         days: day ? [day] : [],
-      };
-      const list = drafts.get(key) || [];
-      list.push(chunk);
-      drafts.set(key, list);
+      }));
+      draftChunksByDay.set(key, chunks);
     });
-    return drafts;
   };
 
   const renderChunks = () => {
-    const draftChunks = readDraftChunks();
+    captureDraftChunks();
     chunksWrap.innerHTML = "";
     const orderedDays = weekIsoDays.filter((iso) => selected.has(iso));
-    const draftUnassigned = draftChunks.get(unassignedKey);
+    const draftUnassigned = draftChunksByDay.get(unassignedKey);
     const unassignedChunks = draftUnassigned || unassignedSubtasks;
     if (!orderedDays.length && !unassignedChunks.length) {
       const empty = document.createElement("p");
@@ -2743,10 +2858,9 @@ function renderWeeklyAssignModal(force = false) {
       heading.innerHTML = `<strong>${WEEKDAY_LABELS[dayIndex]}</strong>`;
       const body = document.createElement("div");
       body.className = "weekly-assign-group__body";
-      const dayChunks = currentWeekSubtasks.filter((subtask) =>
-        (subtask.days || []).map(normalizeIsoDateInput).includes(iso)
-      );
-      const chunks = draftChunks.get(iso) || (dayChunks.length ? dayChunks : [{ id: "", text: "", done: false, days: [iso] }]);
+      const chunks = draftChunksByDay.has(iso)
+        ? draftChunksByDay.get(iso)
+        : [{ id: "", text: "", done: false, days: [iso] }];
       chunks.forEach((chunk) => body.appendChild(renderWeeklyAssignChunk(chunk, iso)));
       const addChunk = document.createElement("button");
       addChunk.type = "button";
@@ -2832,19 +2946,29 @@ async function saveWeeklyAssignment(todoId, panel, weekIsoDays) {
     .map((button) => normalizeIsoDateInput(button.dataset.day))
     .filter(Boolean);
   const selectedSet = new Set(selectedDays);
-  const keepSubtasks = (todo.subtasks || []).filter((subtask) =>
-    (subtask.days || []).some((day) => {
-      const normalized = normalizeIsoDateInput(day);
-      return normalized && !weekIsoDays.includes(normalized);
-    })
-  );
+  const usedSubtaskIds = new Set();
+  const uniqueSubtaskId = (preferredId = "") => {
+    let candidate = String(preferredId || "").trim();
+    while (!candidate || usedSubtaskIds.has(candidate)) {
+      candidate = crypto.randomUUID ? crypto.randomUUID() : `sub-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+    }
+    usedSubtaskIds.add(candidate);
+    return candidate;
+  };
+  const keepSubtasks = (todo.subtasks || []).flatMap((subtask) => {
+    const days = [...new Set((subtask.days || [])
+      .map(normalizeIsoDateInput)
+      .filter((day) => day && !weekIsoDays.includes(day)))];
+    if (!days.length) return [];
+    return [{ ...subtask, id: uniqueSubtaskId(subtask.id), days }];
+  });
   const chunks = [...panel.querySelectorAll(".weekly-assign-chunk")]
     .map((row) => {
       const text = String(row.querySelector(".weekly-assign-chunk__text")?.value || "").trim();
       const day = normalizeIsoDateInput(row.dataset.day);
       if (day && !selectedSet.has(day)) return null;
       return {
-        id: row.dataset.subtaskId || `sub-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        id: uniqueSubtaskId(row.dataset.subtaskId),
         text,
         done: row.dataset.done === "true",
         days: day ? [day] : [],
@@ -2855,7 +2979,7 @@ async function saveWeeklyAssignment(todoId, panel, weekIsoDays) {
   selectedDays.forEach((day) => {
     if (chunkDays.has(day)) return;
     chunks.push({
-      id: `sub-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      id: uniqueSubtaskId(),
       text: "",
       done: false,
       days: [day],
@@ -2863,14 +2987,14 @@ async function saveWeeklyAssignment(todoId, panel, weekIsoDays) {
   });
   const dueDate = normalizeIsoDateInput(panel.querySelector(".weekly-assign-deadline-date")?.value || "");
   const details = String(panel.querySelector(".weekly-assign-description")?.value || "").trim();
-  const nextTodo = {
+  const nextTodo = syncDraftDoneFromSubtasks({
     ...todo,
     weeklyDays: selectedDays,
     subtasks: [...keepSubtasks, ...chunks],
     dueDate: dueDate || null,
     details,
     lane: selectedDays.length ? "month" : "ideas",
-  };
+  });
   try {
     setStatus("Saving weekly assignment...");
     updateTodo(nextTodo);
@@ -3012,10 +3136,15 @@ function renderWeeklyArchive() {
     remove.className = "weekly-archive-item__remove";
     remove.textContent = "×";
     remove.setAttribute("aria-label", `Remove archived week ${week.label}`);
-    remove.addEventListener("click", () => {
-      state.weeklyArchives = state.weeklyArchives.filter((entry) => entry.id !== week.id);
-      saveWeeklyArchives();
-      renderWeekly();
+    remove.addEventListener("click", async () => {
+      try {
+        await api(`/weekly-archives/${week.id}`, { method: "DELETE" });
+        state.weeklyArchives = state.weeklyArchives.filter((entry) => entry.id !== week.id);
+        state.lastSyncedAt = Date.now();
+        renderWeekly();
+      } catch (error) {
+        setStatus(error.message || "Could not remove the archived week.", true);
+      }
     });
     item.append(title, days, score, remove);
     weeklyArchiveList.appendChild(item);
@@ -3210,7 +3339,7 @@ function todoArchiveUnitsForWeek(todo, firstIso, lastIso) {
     projectTitle: unit.projectTitle || "",
   }));
   if (units.length || unassignedUnits.length) return [...units, ...unassignedUnits];
-  if (todo.projectTitle) {
+  if (todo.projectTitle && !(todo.subtasks || []).length && !weeklyTaskHasAssignments(todo)) {
     return [{
       day: "",
       done: Boolean(todo.done),
@@ -3242,6 +3371,7 @@ function percentClass(value) {
 }
 
 async function endCurrentWeek() {
+  if (endWeekInFlight) return;
   const dates = weeklyDates();
   const firstIso = dateToLocalIso(dates[0]);
   const lastIso = dateToLocalIso(dates[6]);
@@ -3251,14 +3381,20 @@ async function endCurrentWeek() {
     setStatus("There are no scheduled tasks to archive.", true);
     return;
   }
+  endWeekInFlight = true;
+  weeklyEndButton.disabled = true;
   const action = await showWeeklyEndModal(`${SHORT_DATE_FORMATTER.format(dates[0])} - ${SHORT_DATE_FORMATTER.format(dates[6])}`);
-  if (!action) return;
+  if (!action) {
+    endWeekInFlight = false;
+    weeklyEndButton.disabled = false;
+    return;
+  }
   const carry = action === "carry";
   const completed = archiveUnits.filter((unit) => unit.done).length;
   const unfinished = archiveUnits.filter((unit) => !unit.done).length;
   const missed = tasks.filter((todo) => todo.missed).length;
-  state.weeklyArchives.unshift({
-    id: `${firstIso}-${Date.now()}`,
+  const archive = {
+    id: `${firstIso}-archive`,
     label: `${SHORT_DATE_FORMATTER.format(dates[0])} - ${SHORT_DATE_FORMATTER.format(dates[6])}`,
     completed,
     total: archiveUnits.length,
@@ -3272,9 +3408,15 @@ async function endCurrentWeek() {
     }),
     tasks: archiveUnits.map((unit) => ({ title: unit.title, done: unit.done, projectId: unit.projectId || "", projectTitle: unit.projectTitle || "" })),
     createdAt: new Date().toISOString(),
-  });
-  saveWeeklyArchives();
+  };
   try {
+    setStatus("Archiving week...");
+    const archivePayload = await api("/weekly-archives", { method: "POST", body: archive });
+    const savedArchive = hydrateWeeklyArchiveFromServer(archivePayload.weeklyArchive);
+    state.weeklyArchives = sortWeeklyArchives([
+      savedArchive,
+      ...state.weeklyArchives.filter((entry) => entry.id !== savedArchive.id),
+    ]);
     if (!carry) {
       const projectIdsToClear = new Set(tasks.map((todo) => todo.projectId).filter(Boolean));
       const legacyProjectTitlesToClear = new Set(tasks.filter((todo) => !todo.projectId).map((todo) => todo.projectTitle).filter(Boolean));
@@ -3304,7 +3446,7 @@ async function endCurrentWeek() {
     }
 
     await Promise.all(tasks.map(async (todo) => {
-      if (todo.done) {
+      if (todo.done || todoSubtasksComplete(todo)) {
         await api(`/todos/${todo.id}`, { method: "DELETE" });
         return;
       }
@@ -3337,14 +3479,14 @@ async function endCurrentWeek() {
           ? [...remainingWeeklyDays, ...currentWeeklyDays.map((day) => addDaysIso(day, 7))]
           : remainingWeeklyDays;
       const nextDate = todo.dueDate || null;
-      const nextTodo = {
+      const nextTodo = syncDraftDoneFromSubtasks({
         ...todo,
         dueDate: nextDate,
         weeklyDays: [...new Set(nextWeeklyDays)].sort(),
         subtasks: nextSubtasks,
         lane: nextDate || nextWeeklyDays.length ? (todo.lane || "ideas") : "ideas",
         missed: false,
-      };
+      });
       await api(`/todos/${todo.id}`, { method: "PUT", body: serializeTodoForApi(nextTodo) });
     }));
     state.selectedDate = addDaysIso(firstIso, 7);
@@ -3354,8 +3496,11 @@ async function endCurrentWeek() {
     await refreshFromServer(false);
     setStatus("Week archived. Unfinished tasks moved forward.");
   } catch (error) {
-    setStatus(`Archive saved, but tasks could not be moved: ${error.message}`, true);
+    setStatus(`Could not archive the week: ${error.message}`, true);
     render();
+  } finally {
+    endWeekInFlight = false;
+    weeklyEndButton.disabled = false;
   }
 }
 
@@ -4655,7 +4800,7 @@ function cloneTodoDraft(todo) {
 }
 
 function syncDraftDoneFromSubtasks(draft) {
-  if (!draft || draft.daily || draft.projectTitle) {
+  if (!draft || draft.daily) {
     return draft;
   }
   const subtasks = Array.isArray(draft.subtasks) ? draft.subtasks : [];

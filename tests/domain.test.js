@@ -118,3 +118,32 @@ test("calendar priority counts only show actual task priorities", () => {
     { high: 1, medium: 1, low: 2 }
   );
 });
+
+test("weekly scheduling excludes tasks assigned only to another week", () => {
+  const futureOnly = {
+    projectTitle: "Exam prep",
+    weeklyDays: ["2026-06-30"],
+    subtasks: [{ id: "future", text: "Future work", days: ["2026-06-30"], done: false }],
+  };
+
+  assert.equal(domain.todoScheduledForWeek(futureOnly, "2026-06-22", "2026-06-28"), false);
+  assert.equal(domain.todoScheduledForWeek(futureOnly, "2026-06-29", "2026-07-05"), true);
+});
+
+test("weekly scheduling keeps genuinely unassigned project work visible", () => {
+  const unassigned = {
+    projectTitle: "Exam prep",
+    weeklyDays: [],
+    subtasks: [{ id: "open", text: "Choose a day", days: [], done: false }],
+  };
+  const emptyTask = { projectTitle: "Exam prep", weeklyDays: [], subtasks: [] };
+
+  assert.equal(domain.todoScheduledForWeek(unassigned, "2026-06-22", "2026-06-28"), true);
+  assert.equal(domain.todoScheduledForWeek(emptyTask, "2026-06-22", "2026-06-28"), true);
+});
+
+test("all subtasks complete marks the parent task complete", () => {
+  assert.equal(domain.todoSubtasksComplete({ subtasks: [] }), false);
+  assert.equal(domain.todoSubtasksComplete({ subtasks: [{ done: true }, { done: true }] }), true);
+  assert.equal(domain.todoSubtasksComplete({ subtasks: [{ done: true }, { done: false }] }), false);
+});

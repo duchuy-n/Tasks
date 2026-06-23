@@ -255,6 +255,87 @@ class PlanboardServerTest(unittest.TestCase):
         self.assertEqual(status, HTTPStatus.OK)
         self.assertEqual(payload["weeklyProjects"], [])
 
+    def test_weekly_archive_flow_and_reset(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Archive User", "email": "archive@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+        archive = {
+            "id": "2026-06-15-archive",
+            "label": "Jun 15, 2026 - Jun 21, 2026",
+            "completed": 3,
+            "total": 5,
+            "carried": 2,
+            "missed": 1,
+            "progress": 60,
+            "days": [{"done": 1, "total": 1}, {"done": 2, "total": 4}],
+            "tasks": [{"title": "Task one", "done": True, "projectId": "project-1", "projectTitle": "Exam prep"}],
+            "createdAt": "2026-06-21T17:00:00+00:00",
+        }
+        status, _, payload = self.request("POST", "/api/weekly-archives", archive, token=token)
+        self.assertEqual(status, HTTPStatus.CREATED)
+        self.assertEqual(payload["weeklyArchive"]["id"], archive["id"])
+        self.assertEqual(payload["weeklyArchive"]["days"][1]["done"], 2)
+
+        status, _, payload = self.request("GET", "/api/bootstrap", token=token)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(len(payload["weeklyArchives"]), 1)
+        self.assertEqual(payload["weeklyArchives"][0]["progress"], 60)
+
+        status, _, payload = self.request("DELETE", f"/api/weekly-archives/{archive['id']}", token=token)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertTrue(payload["ok"])
+
+        status, _, payload = self.request("POST", "/api/weekly-archives", archive, token=token)
+        self.assertEqual(status, HTTPStatus.CREATED)
+        status, _, payload = self.request("POST", "/api/reset", token=token)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertTrue(payload["ok"])
+        status, _, payload = self.request("GET", "/api/bootstrap", token=token)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["weeklyArchives"], [])
+
+    def test_weekly_archive_ids_are_stable_across_users(self) -> None:
+        tokens = []
+        for index in range(2):
+            status, _, payload = self.request(
+                "POST",
+                "/api/auth/register",
+                {"name": f"Archive User {index}", "email": f"archive-{index}@example.com", "password": "password123"},
+            )
+            self.assertEqual(status, HTTPStatus.CREATED)
+            tokens.append(payload["token"])
+
+        archive = {
+            "id": "2026-06-22-archive",
+            "label": "Jun 22, 2026 - Jun 28, 2026",
+            "completed": 1,
+            "total": 2,
+            "carried": 1,
+            "missed": 0,
+            "progress": 50,
+            "days": [],
+            "tasks": [],
+            "createdAt": "2026-06-28T17:00:00+00:00",
+        }
+        archive_ids = []
+        for token in tokens:
+            status, _, payload = self.request("POST", "/api/weekly-archives", archive, token=token)
+            self.assertEqual(status, HTTPStatus.CREATED)
+            archive_ids.append(payload["weeklyArchive"]["id"])
+            status, _, retry_payload = self.request("POST", "/api/weekly-archives", archive, token=token)
+            self.assertEqual(status, HTTPStatus.CREATED)
+            self.assertEqual(retry_payload["weeklyArchive"]["id"], archive_ids[-1])
+
+        self.assertNotEqual(archive_ids[0], archive_ids[1])
+        for token in tokens:
+            status, _, payload = self.request("GET", "/api/bootstrap", token=token)
+            self.assertEqual(status, HTTPStatus.OK)
+            self.assertEqual(len(payload["weeklyArchives"]), 1)
+
     def test_portfolio_flow(self) -> None:
         status, _, payload = self.request(
             "POST",
