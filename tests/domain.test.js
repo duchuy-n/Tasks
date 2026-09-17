@@ -205,10 +205,40 @@ test("calendar priority counts only show actual task priorities", () => {
   );
 });
 
-test("all subtasks complete marks the parent task complete", () => {
+test("subtask completion helper only reports whether every subtask is done", () => {
   assert.equal(domain.todoSubtasksComplete({ subtasks: [] }), false);
   assert.equal(domain.todoSubtasksComplete({ subtasks: [{ done: true }, { done: true }] }), true);
   assert.equal(domain.todoSubtasksComplete({ subtasks: [{ done: true }, { done: false }] }), false);
+});
+
+test("pending subtasks block parent completion", () => {
+  assert.equal(domain.todoCompletionBlocked({ subtasks: [] }), false);
+  assert.equal(domain.todoCompletionBlocked({ subtasks: [{ done: true }, { done: true }] }), false);
+  assert.equal(domain.todoCompletionBlocked({ subtasks: [{ done: true }, { done: false }] }), true);
+});
+
+test("finishing subtasks unlocks but does not auto-complete the parent task", () => {
+  const ready = domain.reconcileTodoDoneWithSubtasks({
+    done: false,
+    subtasks: [{ done: true }, { done: true }],
+  });
+  assert.equal(ready.done, false);
+  const invalidDone = domain.reconcileTodoDoneWithSubtasks({
+    done: true,
+    subtasks: [{ done: true }, { done: false }],
+  });
+  assert.equal(invalidDone.done, false);
+});
+
+test("reopening a daily subtask clears that day's parent completion", () => {
+  const reconciled = domain.reconcileTodoDoneWithSubtasks({
+    daily: true,
+    done: false,
+    dailyCompletedOn: "2026-09-18",
+    subtasks: [{ done: true }, { done: false }],
+  });
+  assert.equal(reconciled.done, false);
+  assert.equal(reconciled.dailyCompletedOn, null);
 });
 
 require("../app-state.js");
@@ -279,6 +309,23 @@ test("PlanboardBoard taskCompletionUnits calculates completion correctly", () =>
       done: false,
     }),
     { total: 3, done: 2 }
+  );
+});
+
+test("PlanboardBoard requires parent confirmation after all subtasks are done", () => {
+  const b = globalThis.PlanboardBoard;
+  const task = {
+    done: false,
+    subtasks: [{ done: true }, { done: true }],
+  };
+  assert.equal(b.boardLane(task, (todo) => todo.done, () => "ideas"), "ideas");
+  assert.deepEqual(
+    b.projectCompletionForTodos([task], (todo) => todo.done),
+    { total: 2, done: 2, complete: false }
+  );
+  assert.equal(
+    b.projectCompletionForTodos([{ ...task, done: true }], (todo) => todo.done).complete,
+    true
   );
 });
 

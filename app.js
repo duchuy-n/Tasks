@@ -249,10 +249,12 @@ let dragPortfolioItemId = "";
 let dragCardPosition = "after";
 let statusTimerId = 0;
 let detailSaveTimerId = 0;
+let detailDraftRevision = 0;
 let syncLabelTimerId = 0;
 let undoTimerId = 0;
-let endWeekInFlight = false;
 const dailyStreakResetIds = new Set();
+const expandedBoardSubtasks = new Set();
+const todoMutationQueues = new Map();
 
 const state = PLANBOARD_STATE.createState
   ? PLANBOARD_STATE.createState()
@@ -426,9 +428,25 @@ async function resetAllData() {
   }
 }
 
-async function saveTodoPatch(todoId, patch, statusMsg = "") {
+function enqueueTodoMutation(todoId, operation) {
+  const previous = todoMutationQueues.get(todoId) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(operation);
+  todoMutationQueues.set(todoId, next);
+  next.finally(() => {
+    if (todoMutationQueues.get(todoId) === next) {
+      todoMutationQueues.delete(todoId);
+    }
+  });
+  return next;
+}
+
+function saveTodoPatch(todoId, patch, statusMsg = "") {
+  return enqueueTodoMutation(todoId, () => saveTodoPatchNow(todoId, patch, statusMsg));
+}
+
+async function saveTodoPatchNow(todoId, patch, statusMsg = "") {
   const todo = state.todos.find((entry) => entry.id === todoId);
-  if (!todo) return;
+  if (!todo) return false;
   const previous = cloneTodoDraft(todo);
   const nextTodo = { ...todo, ...patch };
   try {
@@ -450,6 +468,7 @@ async function saveTodoPatch(todoId, patch, statusMsg = "") {
     state.lastSyncedAt = Date.now();
     render();
     if (statusMsg) setStatus(statusMsg);
+    return true;
   } catch (error) {
     updateTodo(previous);
     if (state.detailTaskId === todo.id) {
@@ -457,6 +476,7 @@ async function saveTodoPatch(todoId, patch, statusMsg = "") {
     }
     render();
     setStatus(error.message, true);
+    return false;
   }
 }
 
@@ -522,15 +542,6 @@ function renderCommandPaletteResults(rawQuery = "") {
       keywords: "portfolio projects du an ho so",
       action: () => setActiveView("portfolio"),
     },
-    {
-      type: "nav",
-      icon: "❖",
-      title: "Chuyển sang Priority Matrix",
-      subtitle: "Ma trận ưu tiên Eisenhower 4 góc phần tư",
-      badge: "View",
-      keywords: "matrix priority eisenhower uutien matran",
-      action: () => setActiveView("matrix"),
-    },
   ];
 
   const actionCommands = [
@@ -538,7 +549,7 @@ function renderCommandPaletteResults(rawQuery = "") {
       type: "action",
       icon: "+",
       title: "Tạo nhiệm vụ mới (New Task)",
-      subtitle: "Thêm task vào Ideas hoặc Today",
+      subtitle: "Thêm task vào Ideas, This Month hoặc Daily",
       badge: "Action",
       keywords: "new task create add tao moi nhiemvu",
       action: () => openComposer("task", { locked: true }),
@@ -851,12 +862,31 @@ function bindEvents() {
   sidebarZoomInButton?.addEventListener("click", zoomIn);
 
   document.addEventListener("keydown", (event) => {
-    const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : "";
-    const isEditing = activeTag === "input" || activeTag === "textarea" || activeTag === "select" || (document.activeElement && document.activeElement.isContentEditable);
+    const activeElement = document.activeElement;
+    const activeTag = activeElement ? activeElement.tagName.toLowerCase() : "";
+    const activeInputType = activeTag === "input" ? String(activeElement.type || "text").toLowerCase() : "";
+    const isEditing = activeTag === "input" || activeTag === "textarea" || activeTag === "select" || (activeElement && activeElement.isContentEditable);
+    const isTextEditing = activeTag === "textarea"
+      || activeTag === "select"
+      || Boolean(activeElement && activeElement.isContentEditable)
+      || (activeTag === "input" && !["checkbox", "radio", "button", "submit", "reset"].includes(activeInputType));
 
     if ((event.ctrlKey || event.metaKey) && (event.key === "k" || event.key === "K") && !event.altKey) {
       event.preventDefault();
       toggleCommandPalette();
+      return;
+    }
+
+    if (
+      (event.ctrlKey || event.metaKey)
+      && (event.key === "z" || event.key === "Z")
+      && !event.altKey
+      && !event.shiftKey
+      && !isTextEditing
+      && state.undoAction
+    ) {
+      event.preventDefault();
+      undoLastAction();
       return;
     }
 
@@ -1071,17 +1101,7 @@ function bindEvents() {
   });
 
   clearCompletedButton.addEventListener("click", async () => {
-    const completed = state.todos.filter((todo) => isTodoEffectivelyDone(todo));
-    if (!completed.length) {
-      return;
-    }
-    try {
-      setStatus("Completed tasks removed.");
-      queueClearCompletedUndo(completed);
-      render();
-    } catch (error) {
-      setStatus(error.message, true);
-    }
+    clearCompletedTasks();
   });
 
   selectedDateInput.addEventListener("change", () => {
@@ -1114,12 +1134,14 @@ function bindEvents() {
       const isDaily = formData.get("daily") === "on" || formData.get("lane") === "daily";
       const dueDate = normalizeIsoDateInput(String(formData.get("dueDate") || "").trim()) || null;
       const requestedLane = inferStartingLane(String(formData.get("lane") || ""), dueDate, isDaily);
+      const selectedProject = selectedTaskProject();
       const payload = await api(editingId ? `/todos/${editingId}` : "/todos", {
         method: editingId ? "PUT" : "POST",
         body: serializeTodoForApi({
           title: String(formData.get("title") || "").trim(),
           details: String(formData.get("details") || "").trim(),
-          projectTitle: String(formData.get("project") || "").trim(),
+          projectId: selectedProject.id,
+          projectTitle: selectedProject.title,
           subtasks: currentTaskSubtasks(editingId),
           dueDate,
           lane: requestedLane,
@@ -1258,6 +1280,10 @@ function bindEvents() {
       if (!dragTodoId || !lane || lane === "daily") {
         return;
       }
+      const dragged = state.todos.find((entry) => entry.id === dragTodoId);
+      if (lane === "done" && todoCompletionBlocked(dragged)) {
+        return;
+      }
       event.preventDefault();
       column.classList.add("is-drop-target");
     };
@@ -1297,6 +1323,12 @@ function bindEvents() {
       }
       const dragged = state.todos.find((entry) => entry.id === dragTodoId);
       if (!dragged) {
+        dragTodoId = "";
+        dragCardPosition = "after";
+        return;
+      }
+      if (lane === "done" && todoCompletionBlocked(dragged)) {
+        setStatus("Complete every subtask before completing this task.", true);
         dragTodoId = "";
         dragCardPosition = "after";
         return;
@@ -1512,9 +1544,8 @@ function openComposer(tab, options = {}) {
     todoDailyInput.checked = false;
     todoDailyResetInput.value = String(DEFAULT_DAILY_RESET_AFTER_DAYS);
     syncTaskDailyResetControls();
-    if (options.projectTitle) {
-      renderTaskProjectOptions(options.projectTitle);
-      todoProjectInput.value = options.projectTitle;
+    if (options.projectId || options.projectTitle) {
+      renderTaskProjectOptions(options.projectId || options.projectTitle);
     }
     if (!shouldPrefillDate && !options.dueDate && !options.noDate) {
       syncTaskDateByLane();
@@ -1757,7 +1788,7 @@ function renderSidebar() {
   openTaskCount.textContent = String(state.todos.filter((todo) => !isTodoEffectivelyDone(todo)).length);
   noteCount.textContent = state.notesByDate[state.selectedDate] ? "1" : "0";
   planCount.textContent = String(selectedPlans.length);
-  const completedCount = state.todos.filter((todo) => isTodoEffectivelyDone(todo)).length;
+  const completedCount = state.todos.filter((todo) => !todo.daily && Boolean(todo.done)).length;
   completedMeta.textContent = `${completedCount} completed`;
   clearCompletedButton.hidden = completedCount === 0;
 }
@@ -1819,6 +1850,9 @@ function syncTaskDetailChrome(draft = state.detailDraft || currentDetailTodo()) 
         toggleTaskDoneButton,
       },
     });
+    const completionBlocked = todoCompletionBlocked(draft);
+    toggleTaskDoneButton.disabled = completionBlocked && !draft.done;
+    toggleTaskDoneButton.title = completionBlocked ? "Complete every subtask first" : "";
     return;
   }
   if (!draft) {
@@ -1828,6 +1862,9 @@ function syncTaskDetailChrome(draft = state.detailDraft || currentDetailTodo()) 
   }
   detailHeading.textContent = draft.title || "Task details";
   toggleTaskDoneButton.textContent = draft.daily ? "Complete Today" : draft.done ? "Mark Active" : "Mark Done";
+  const completionBlocked = todoCompletionBlocked(draft);
+  toggleTaskDoneButton.disabled = completionBlocked && !draft.done;
+  toggleTaskDoneButton.title = completionBlocked ? "Complete every subtask first" : "";
   detailSaveState.textContent = state.detailSaving
     ? "Saving changes..."
     : state.detailDirty
@@ -1925,6 +1962,7 @@ function renderUndoToast() {
   }
   undoToastLabel.textContent = state.undoAction.label;
   if (undoToastProgress) {
+    undoToastProgress.style.setProperty("--undo-duration", `${Number(state.undoAction.durationMs || 5000)}ms`);
     undoToastProgress.classList.remove("is-running");
     void undoToastProgress.offsetWidth;
     undoToastProgress.classList.add("is-running");
@@ -1936,7 +1974,7 @@ function renderTaskActionSheet() {
     PLANBOARD_COMPOSER.renderTaskActionSheet({
       state,
       dom: { taskActionOverlay, taskActionTitle, taskActionMoveList },
-      utils: { BOARD_LANES, boardLane, laneLabel },
+      utils: { BOARD_LANES, boardLane, laneLabel, todoCompletionBlocked },
       onClose: () => closeTaskActionSheet(),
       onMoveLane: (todoId, lane) => moveTodoToBoardLane(todoId, lane),
     });
@@ -1960,7 +1998,10 @@ function renderTaskActionSheet() {
     button.type = "button";
     button.className = `task-action-move-list__button${boardLane(todo) === lane ? " is-active" : ""}`;
     button.textContent = laneLabel(lane);
-    button.disabled = boardLane(todo) === lane || (lane === "daily" && !todo.daily);
+    button.disabled = boardLane(todo) === lane || (lane === "daily" && !todo.daily) || (lane === "done" && todoCompletionBlocked(todo));
+    if (lane === "done" && todoCompletionBlocked(todo)) {
+      button.title = "Complete every subtask first";
+    }
     button.addEventListener("click", async () => {
       closeTaskActionSheet();
       if (boardLane(todo) !== lane && !(lane === "daily" && !todo.daily)) {
@@ -1991,7 +2032,7 @@ function renderViewMode() {
   boardView.classList.toggle("board-view--hidden", isCalendar || isPortfolio);
   calendarView.classList.toggle("board-view--hidden", !isCalendar);
   portfolioView.classList.toggle("board-view--hidden", !isPortfolio);
-  clearCompletedButton.hidden = isPortfolio || isCalendar || state.todos.filter((todo) => isTodoEffectivelyDone(todo)).length === 0;
+  clearCompletedButton.hidden = isPortfolio || isCalendar || !state.todos.some((todo) => !todo.daily && Boolean(todo.done));
 }
 
 function renderSidebarState() {
@@ -2271,19 +2312,27 @@ function projectCompletionForTodos(todos) {
   );
   return {
     ...totals,
-    complete: totals.total > 0 && totals.done === totals.total,
+    complete: (todos || []).length > 0 && (todos || []).every(isTodoEffectivelyDone),
   };
 }
 
 function isTodoEffectivelyDone(todo) {
   if (!todo) return false;
   if (todo.daily) return isDailyCompletedToday(todo);
-  return Boolean(todo.done || todoSubtasksComplete(todo));
+  return Boolean(todo.done);
 }
 
 function todoSubtasksComplete(todo) {
   const subtasks = Array.isArray(todo?.subtasks) ? todo.subtasks : [];
   return subtasks.length > 0 && subtasks.every((subtask) => Boolean(subtask.done));
+}
+
+function todoCompletionBlocked(todo) {
+  if (PLANBOARD_DOMAIN.todoCompletionBlocked) {
+    return PLANBOARD_DOMAIN.todoCompletionBlocked(todo);
+  }
+  const subtasks = Array.isArray(todo?.subtasks) ? todo.subtasks : [];
+  return subtasks.length > 0 && !subtasks.every((subtask) => Boolean(subtask.done));
 }
 
 function boardEntryTodo(entry) {
@@ -2352,6 +2401,18 @@ function taskProjectItems() {
     || String(left.title || "").localeCompare(String(right.title || ""))
   );
 }
+
+function selectedTaskProject() {
+  const option = todoProjectInput.selectedOptions[0];
+  if (!option || !option.value) {
+    return { id: "", title: "" };
+  }
+  return {
+    id: String(option.dataset.projectId || "").trim(),
+    title: String(option.dataset.projectTitle || option.textContent || "").trim(),
+  };
+}
+
 function todoProjectKey(todo) {
   if (!todo || !todo.projectTitle) return "";
   return todo.projectId ? `id:${todo.projectId}` : `title:${todo.projectTitle.trim().toLowerCase()}`;
@@ -2376,11 +2437,19 @@ function renderTaskProjectOptions(selected = todoProjectInput.value) {
   todoProjectInput.appendChild(empty);
   taskProjectItems().forEach((project) => {
     const option = document.createElement("option");
-    option.value = project.title;
+    option.value = projectKey(project);
+    option.dataset.projectId = project.id && !String(project.id).startsWith("derived-") ? project.id : "";
+    option.dataset.projectTitle = project.title;
     option.textContent = project.title;
     todoProjectInput.appendChild(option);
   });
-  todoProjectInput.value = selected || "";
+  const selectedText = String(selected || "").trim();
+  const selectedOption = [...todoProjectInput.options].find((option) =>
+    option.value === selectedText
+    || option.dataset.projectId === selectedText
+    || option.dataset.projectTitle === selectedText
+  );
+  todoProjectInput.value = selectedOption?.value || "";
 }
 
 function showResetAllModal() {
@@ -2525,7 +2594,11 @@ function renderCalendar() {
   renderCalendarTimeline(deadlineMap.get(state.selectedDate) || []);
 }
 
-async function moveTodoToDate(todoId, targetDate) {
+function moveTodoToDate(todoId, targetDate) {
+  return enqueueTodoMutation(todoId, () => moveTodoToDateNow(todoId, targetDate));
+}
+
+async function moveTodoToDateNow(todoId, targetDate) {
   const todo = state.todos.find((entry) => entry.id === todoId);
   if (!todo || todo.daily) {
     return;
@@ -2979,6 +3052,8 @@ function renderTodoCard(todo) {
   const due = fragment.querySelector(".task-card__due");
   const priority = fragment.querySelector(".task-card__priority");
   const subtaskMeta = fragment.querySelector(".task-card__subtasks");
+  const subtaskList = fragment.querySelector(".task-card__subtask-list");
+  const subtaskListToggle = fragment.querySelector(".task-card__subtask-toggle-list");
   const streak = fragment.querySelector(".task-card__streak");
   let longPressTimerId = 0;
   let longPressTriggered = false;
@@ -3000,6 +3075,17 @@ function renderTodoCard(todo) {
   due.textContent = todo.daily ? "Daily" : todo.dueDate ? SHORT_DATE_FORMATTER.format(new Date(`${todo.dueDate}T00:00:00`)) : "";
   const subtaskCount = (todo.subtasks || []).length;
   const doneSubtasks = (todo.subtasks || []).filter((item) => item.done).length;
+  const completionBlocked = todoCompletionBlocked(todo);
+  const readyToComplete = subtaskCount > 0 && doneSubtasks === subtaskCount && !taskDone;
+  subtaskMeta.textContent = subtaskCount
+    ? `${doneSubtasks}/${subtaskCount} subtasks${readyToComplete ? " · Ready to complete" : ""}`
+    : "";
+  subtaskMeta.classList.toggle("is-ready", readyToComplete);
+  checkbox.disabled = completionBlocked && !taskDone;
+  checkbox.title = completionBlocked ? "Complete every subtask first" : "";
+  card.classList.toggle("has-subtasks", subtaskCount > 0);
+  card.classList.toggle("is-completion-locked", completionBlocked);
+  renderTodoCardSubtasks(subtaskList, subtaskListToggle, todo, taskDone);
   const momentum = Number(todo.streak || 0);
   if (todo.daily && momentum > 0) {
     const countdown = dailyResetCountdownText(todo);
@@ -3057,6 +3143,10 @@ function renderTodoCard(todo) {
   }
 
   card.addEventListener("dragstart", (event) => {
+    if (event.target instanceof Element && event.target.closest(".task-card__subtask-list")) {
+      event.preventDefault();
+      return;
+    }
     if (!canDragTodo(todo)) {
       event.preventDefault();
       return;
@@ -3192,6 +3282,137 @@ function renderTodoCard(todo) {
   return fragment;
 }
 
+function renderCardSubtasks(target, toggleButton, entries, expansionKey, taskDone) {
+  if (!target) return;
+  target.innerHTML = "";
+  const allEntries = entries || [];
+  const completedEntries = allEntries.filter((entry) => Boolean(entry.subtask.done));
+  const pendingEntries = allEntries.filter((entry) => !entry.subtask.done);
+  const expanded = expandedBoardSubtasks.has(expansionKey);
+  const visibleEntries = expanded ? [...pendingEntries, ...completedEntries] : pendingEntries;
+  target.hidden = taskDone || allEntries.length === 0;
+
+  if (toggleButton) {
+    toggleButton.hidden = target.hidden || completedEntries.length === 0;
+    toggleButton.textContent = expanded
+      ? "Hide completed subtasks"
+      : `Show ${completedEntries.length} completed`;
+    toggleButton.setAttribute("aria-expanded", String(expanded));
+    toggleButton.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (expandedBoardSubtasks.has(expansionKey)) {
+        expandedBoardSubtasks.delete(expansionKey);
+      } else {
+        expandedBoardSubtasks.add(expansionKey);
+      }
+      renderBoard();
+    };
+  }
+  if (target.hidden) return;
+
+  visibleEntries.forEach(({ todo, subtask, showParent }) => {
+    const item = document.createElement("li");
+    item.className = "task-card__subtask-item";
+    item.classList.toggle("is-done", Boolean(subtask.done));
+
+    const label = document.createElement("label");
+    label.className = "task-card__subtask-label";
+
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    toggle.className = "task-card__subtask-toggle";
+    toggle.checked = Boolean(subtask.done);
+    toggle.setAttribute("aria-label", `Mark subtask ${subtask.text} as ${subtask.done ? "active" : "complete"}`);
+    toggle.addEventListener("change", async (event) => {
+      event.stopPropagation();
+      await updateTodoCardSubtask(todo, subtask.id, toggle.checked);
+    });
+
+    const text = document.createElement("span");
+    text.className = "task-card__subtask-text";
+    if (showParent) {
+      const parent = document.createElement("strong");
+      parent.className = "task-card__subtask-parent";
+      parent.textContent = todo.title;
+      text.append(parent, document.createTextNode(subtask.text));
+    } else {
+      text.textContent = subtask.text;
+    }
+
+    label.append(toggle, text);
+    item.appendChild(label);
+    target.appendChild(item);
+  });
+}
+
+function renderTodoCardSubtasks(target, toggleButton, todo, taskDone) {
+  const subtasks = Array.isArray(todo?.subtasks) ? todo.subtasks : [];
+  renderCardSubtasks(
+    target,
+    toggleButton,
+    subtasks.map((subtask) => ({ todo, subtask, showParent: false })),
+    `todo:${todo.id}`,
+    taskDone
+  );
+}
+
+async function updateTodoCardSubtask(todo, subtaskId, nextDone) {
+  if (!todo?.id) return false;
+  return enqueueTodoMutation(todo.id, async () => {
+    const current = state.todos.find((entry) => entry.id === todo.id);
+    if (!current) return false;
+    const subtasks = Array.isArray(current.subtasks) ? current.subtasks : [];
+    const previousSubtasks = subtasks.map((entry) => ({ ...entry }));
+    const previousDone = Boolean(current.done);
+    const previousDailyCompletedOn = current.dailyCompletedOn || null;
+    const changedSubtask = subtasks.find((entry) => entry.id === subtaskId);
+    if (!changedSubtask || Boolean(changedSubtask.done) === Boolean(nextDone)) return true;
+    const nextSubtasks = subtasks.map((entry) =>
+      entry.id === subtaskId ? { ...entry, done: nextDone } : { ...entry }
+    );
+    const nextTodo = syncDraftDoneFromSubtasks({ ...current, subtasks: nextSubtasks });
+    const saved = await saveTodoPatchNow(
+      current.id,
+      {
+        subtasks: nextSubtasks,
+        done: Boolean(nextTodo.done),
+        dailyCompletedOn: nextTodo.dailyCompletedOn || null,
+      },
+      nextDone ? "Subtask completed." : "Subtask reopened."
+    );
+    if (!saved) return false;
+    setUndoAction({
+      label: nextDone
+        ? `Completed subtask "${changedSubtask.text || "Subtask"}"`
+        : `Reopened subtask "${changedSubtask.text || "Subtask"}"`,
+      durationMs: 10000,
+      rollback: async () => {
+        await saveTodoPatch(
+          current.id,
+          {
+            subtasks: previousSubtasks,
+            done: previousDone,
+            dailyCompletedOn: previousDailyCompletedOn,
+          },
+          "Subtask change undone."
+        );
+      },
+      commit: async () => Promise.resolve(),
+    });
+    return true;
+  });
+}
+
+function renderBoardProjectSubtasks(target, toggleButton, todos, projectDone, projectKeyValue) {
+  const taskEntries = (todos || []).filter((todo) => Array.isArray(todo.subtasks) && todo.subtasks.length > 0);
+  const showTaskTitle = taskEntries.length > 1 || (todos || []).length > 1;
+  const entries = taskEntries.flatMap((todo) =>
+    todo.subtasks.map((subtask) => ({ todo, subtask, showParent: showTaskTitle }))
+  );
+  renderCardSubtasks(target, toggleButton, entries, `project:${projectKeyValue}`, projectDone);
+}
+
 function renderBoardProjectCard(group) {
   const fragment = todoCardTemplate.content.cloneNode(true);
   const card = fragment.querySelector(".task-card");
@@ -3202,9 +3423,12 @@ function renderBoardProjectCard(group) {
   const due = fragment.querySelector(".task-card__due");
   const priority = fragment.querySelector(".task-card__priority");
   const subtaskMeta = fragment.querySelector(".task-card__subtasks");
+  const subtaskList = fragment.querySelector(".task-card__subtask-list");
+  const subtaskListToggle = fragment.querySelector(".task-card__subtask-toggle-list");
   const streak = fragment.querySelector(".task-card__streak");
   const todos = group.todos || [];
   const completion = projectCompletionForTodos(todos);
+  const completionBlocked = todos.some((todo) => todoCompletionBlocked(todo));
   const childTitles = [...new Set(todos.map((todo) => todo.title).filter(Boolean))];
 
   card.dataset.projectId = group.projectId || "";
@@ -3214,22 +3438,31 @@ function renderBoardProjectCard(group) {
   card.classList.remove("is-draggable");
   card.draggable = false;
   checkbox.checked = completion.complete;
+  checkbox.disabled = completionBlocked && !completion.complete;
+  checkbox.title = completionBlocked ? "Complete every subtask first" : "";
   title.textContent = group.title || "Untitled project";
   details.textContent = childTitles.length
     ? `${childTitles.slice(0, 3).join(" - ")}${childTitles.length > 3 ? ` - +${childTitles.length - 3} more` : ""}`
     : "No tasks yet.";
   due.textContent = boardProjectLane(group) === "month" ? "This Month" : "";
-  subtaskMeta.textContent = completion.total ? `${completion.done}/${completion.total} tasks` : "";
+  const readyToComplete = completion.total > 0 && completion.done === completion.total && !completion.complete;
+  subtaskMeta.textContent = completion.total
+    ? `${completion.done}/${completion.total} items${readyToComplete ? " · Ready to complete" : ""}`
+    : "";
+  subtaskMeta.classList.toggle("is-ready", readyToComplete);
+  renderBoardProjectSubtasks(subtaskList, subtaskListToggle, todos, completion.complete, group.key);
   streak.textContent = "";
   priority.textContent = "PROJECT";
   priority.className = "task-card__priority priority-medium";
 
   checkbox.addEventListener("change", async () => {
-    const nextDone = checkbox.checked;
-    for (const todo of todos) {
-      if (Boolean(todo.done) !== nextDone) {
-        await toggleTodoDone(todo.id, nextDone);
-      }
+    const success = await setProjectCompletion(
+      todos.map((todo) => todo.id),
+      checkbox.checked,
+      group.title || "Project"
+    );
+    if (!success) {
+      checkbox.checked = !checkbox.checked;
     }
   });
 
@@ -3249,9 +3482,89 @@ function renderBoardProjectCard(group) {
   return fragment;
 }
 
-async function moveTodoToLane(todoId, targetLane) {
+function projectCompletionUpdate(todo, expectedUpdatedAt = todo.updatedAt) {
+  return {
+    id: todo.id,
+    done: Boolean(todo.done),
+    dailyCompletedOn: todo.dailyCompletedOn || null,
+    streak: Number(todo.streak || 0),
+    expectedUpdatedAt: String(expectedUpdatedAt || "").trim() || null,
+  };
+}
+
+async function persistProjectCompletion(nextTodos, expectedById) {
+  const payload = await api("/todos/batch-completion", {
+    method: "POST",
+    body: {
+      updates: nextTodos.map((todo) =>
+        projectCompletionUpdate(todo, expectedById.get(todo.id)?.updatedAt)
+      ),
+    },
+  });
+  (payload.todos || []).map(hydrateTodoFromServer).forEach(updateTodo);
+  state.lastSyncedAt = Date.now();
+  render();
+}
+
+async function setProjectCompletion(todoIds, nextDone, projectTitle) {
+  await Promise.all(todoIds.map((todoId) => (todoMutationQueues.get(todoId) || Promise.resolve()).catch(() => undefined)));
+  const todos = todoIds.map((todoId) => state.todos.find((todo) => todo.id === todoId)).filter(Boolean);
+  if (!todos.length) return false;
+  if (nextDone && todos.some((todo) => todoCompletionBlocked(todo))) {
+    setStatus("Complete every subtask before completing this project.", true);
+    return false;
+  }
+
+  const previous = todos.map(cloneTodoDraft);
+  const expectedById = new Map(previous.map((todo) => [todo.id, todo]));
+  const optimistic = todos.map((todo) => {
+    if (todo.daily) {
+      return nextDone
+        ? completeDailyTodo(todo)
+        : { ...todo, dailyCompletedOn: null };
+    }
+    return { ...todo, done: nextDone };
+  });
+  optimistic.forEach(updateTodo);
+  render();
+
+  try {
+    await persistProjectCompletion(optimistic, expectedById);
+    setStatus(nextDone ? "Project completed." : "Project reopened.");
+    setUndoAction({
+      label: nextDone ? `Completed project "${projectTitle}"` : `Reopened project "${projectTitle}"`,
+      durationMs: 10000,
+      rollback: async () => {
+        const currentById = new Map(
+          previous.map((snapshot) => [snapshot.id, state.todos.find((todo) => todo.id === snapshot.id)])
+        );
+        previous.forEach(updateTodo);
+        render();
+        await persistProjectCompletion(previous, currentById);
+        setStatus("Project completion undone.");
+      },
+      commit: async () => Promise.resolve(),
+    });
+    return true;
+  } catch (error) {
+    previous.forEach(updateTodo);
+    render();
+    setStatus(error.message || "Could not update project.", true);
+    return false;
+  }
+}
+
+function moveTodoToLane(todoId, targetLane) {
+  return enqueueTodoMutation(todoId, () => moveTodoToLaneNow(todoId, targetLane));
+}
+
+async function moveTodoToLaneNow(todoId, targetLane) {
   const todo = state.todos.find((entry) => entry.id === todoId);
   if (!todo) {
+    return;
+  }
+  if (targetLane === "done" && todoCompletionBlocked(todo)) {
+    setStatus("Complete every subtask before completing this task.", true);
     return;
   }
 
@@ -3286,6 +3599,9 @@ async function moveTodoToLane(todoId, targetLane) {
     state.lastSyncedAt = Date.now();
     render();
     setStatus("Task moved.");
+    if (targetLane === "done") {
+      queueTodoSnapshotUndo(previous, `Completed "${todo.title || "Task"}"`);
+    }
   } catch (error) {
     updateTodo(previous);
     if (state.detailTaskId === todo.id) {
@@ -3296,9 +3612,17 @@ async function moveTodoToLane(todoId, targetLane) {
   }
 }
 
-async function moveTodoToBoardLane(todoId, targetLane) {
+function moveTodoToBoardLane(todoId, targetLane) {
+  return enqueueTodoMutation(todoId, () => moveTodoToBoardLaneNow(todoId, targetLane));
+}
+
+async function moveTodoToBoardLaneNow(todoId, targetLane) {
   const todo = state.todos.find((entry) => entry.id === todoId);
   if (!todo || !BOARD_LANES.includes(targetLane)) {
+    return;
+  }
+  if (targetLane === "done" && todoCompletionBlocked(todo)) {
+    setStatus("Complete every subtask before completing this task.", true);
     return;
   }
   if (targetLane === "daily" && !todo.daily) {
@@ -3326,6 +3650,9 @@ async function moveTodoToBoardLane(todoId, targetLane) {
     state.lastSyncedAt = Date.now();
     render();
     setStatus(`Task moved to ${laneLabel(targetLane)}.`);
+    if (targetLane === "done") {
+      queueTodoSnapshotUndo(previous, `Completed "${todo.title || "Task"}"`);
+    }
   } catch (error) {
     updateTodo(previous);
     render();
@@ -3334,6 +3661,7 @@ async function moveTodoToBoardLane(todoId, targetLane) {
 }
 
 async function reorderTodo(todoId, targetLane, targetTodoId = "", position = "after") {
+  await Promise.all([...todoMutationQueues.values()].map((pending) => pending.catch(() => undefined)));
   const dragged = state.todos.find((entry) => entry.id === todoId);
   if (!dragged || !canManualReorder() || dragged.done || targetLane === "done") {
     return;
@@ -3364,6 +3692,7 @@ async function reorderTodo(todoId, targetLane, targetTodoId = "", position = "af
         lane,
         sortOrder: (index + 1) * 1024,
         done: false,
+        expectedUpdatedAt: String(todo.updatedAt || "").trim() || null,
       });
     });
   });
@@ -3548,6 +3877,7 @@ function serializeTodoForApi(todo) {
     dailyResetAfterDays: normalizeDailyResetAfterDays(todo.dailyResetAfterDays),
     projectId: String(todo.projectId || "").replace(/[\[\]]/g, "").trim(),
     projectTitle: String(todo.projectTitle || "").replace(/[\[\]]/g, "").trim(),
+    expectedUpdatedAt: String(todo.updatedAt || "").trim() || null,
   };
 }
 
@@ -3839,6 +4169,7 @@ function openTaskDetail(todoId, options = {}) {
   }
   state.detailTaskId = todo.id;
   state.detailDraft = cloneTodoDraft(todo);
+  detailDraftRevision += 1;
   state.detailDirty = false;
   state.detailSaving = false;
   state.detailCompletedCollapsed = true;
@@ -3859,6 +4190,7 @@ function closeTaskDetail() {
   }
   state.detailTaskId = "";
   state.detailDraft = null;
+  detailDraftRevision += 1;
   state.detailDirty = false;
   state.detailSaving = false;
   state.detailCompletedCollapsed = true;
@@ -3891,16 +4223,25 @@ function cloneTodoDraft(todo) {
 }
 
 function syncDraftDoneFromSubtasks(draft) {
-  if (!draft || draft.daily) {
+  if (PLANBOARD_DOMAIN.reconcileTodoDoneWithSubtasks) {
+    return PLANBOARD_DOMAIN.reconcileTodoDoneWithSubtasks(draft);
+  }
+  if (!draft) {
     return draft;
   }
   const subtasks = Array.isArray(draft.subtasks) ? draft.subtasks : [];
-  if (!subtasks.length) {
+  if (!subtasks.length || subtasks.every((item) => Boolean(item.done))) {
     return draft;
+  }
+  if (draft.daily) {
+    return {
+      ...draft,
+      dailyCompletedOn: null,
+    };
   }
   return {
     ...draft,
-    done: subtasks.every((item) => Boolean(item.done)),
+    done: false,
   };
 }
 
@@ -3912,6 +4253,7 @@ function updateDetailDraft(patch) {
     ...state.detailDraft,
     ...patch,
   };
+  detailDraftRevision += 1;
   state.detailDirty = true;
   syncTaskDetailChrome(state.detailDraft);
   scheduleDetailSave();
@@ -3939,10 +4281,13 @@ async function flushDetailSave() {
     detailSaveState.textContent = "Title must be at least 2 characters.";
     return;
   }
+  const savingTaskId = state.detailTaskId;
+  const savingRevision = detailDraftRevision;
+  const draftToSave = cloneTodoDraft(state.detailDraft);
   const optimistic = hydrateTodoFromServer({
     ...previous,
-    ...state.detailDraft,
-    lane: normalizeLane(state.detailDraft),
+    ...draftToSave,
+    lane: normalizeLane(draftToSave),
   });
 
   state.detailSaving = true;
@@ -3953,15 +4298,31 @@ async function flushDetailSave() {
   renderTaskDetail();
 
   try {
-    const payload = await api(`/todos/${state.detailTaskId}`, {
-      method: "PUT",
-      body: serializeTodoForApi(state.detailDraft),
+    const payload = await enqueueTodoMutation(savingTaskId, async () => {
+      const latest = state.todos.find((todo) => todo.id === savingTaskId);
+      if (!latest) {
+        throw new Error("Task not found.");
+      }
+      const queuedDraft = {
+        ...latest,
+        ...draftToSave,
+        updatedAt: latest.updatedAt,
+      };
+      return api(`/todos/${savingTaskId}`, {
+        method: "PUT",
+        body: serializeTodoForApi(queuedDraft),
+      });
     });
     const hydrated = hydrateTodoFromServer(payload.todo);
     updateTodo(hydrated);
-    state.detailDraft = cloneTodoDraft(hydrated);
-    state.detailDirty = false;
     state.detailSaving = false;
+    if (state.detailTaskId === savingTaskId && detailDraftRevision === savingRevision) {
+      state.detailDraft = cloneTodoDraft(hydrated);
+      state.detailDirty = false;
+    } else if (state.detailTaskId === savingTaskId && state.detailDraft) {
+      state.detailDirty = true;
+      scheduleDetailSave();
+    }
     state.lastSyncedAt = Date.now();
     render();
   } catch (error) {
@@ -3971,6 +4332,10 @@ async function flushDetailSave() {
     }
     render();
     setStatus(error.message, true);
+    if (state.detailTaskId === savingTaskId && detailDraftRevision !== savingRevision) {
+      state.detailDirty = true;
+      scheduleDetailSave();
+    }
   }
 }
 
@@ -3978,14 +4343,52 @@ function updateDetailSubtask(id, patch) {
   if (!state.detailDraft) {
     return;
   }
+  const before = cloneTodoDraft(state.detailDraft);
+  const changedSubtask = before.subtasks.find((item) => item.id === id);
   state.detailDraft = {
     ...state.detailDraft,
     subtasks: (state.detailDraft.subtasks || []).map((item) => item.id === id ? { ...item, ...patch } : item),
   };
+  detailDraftRevision += 1;
   state.detailDraft = syncDraftDoneFromSubtasks(state.detailDraft);
   state.detailDirty = true;
   renderTaskDetail();
   scheduleDetailSave();
+  if (Object.prototype.hasOwnProperty.call(patch, "done") && Boolean(changedSubtask?.done) !== Boolean(patch.done)) {
+    const todoId = state.detailTaskId;
+    setUndoAction({
+      label: patch.done
+        ? `Completed subtask "${changedSubtask?.text || "Subtask"}"`
+        : `Reopened subtask "${changedSubtask?.text || "Subtask"}"`,
+      durationMs: 10000,
+      rollback: async () => {
+        if (state.detailTaskId === todoId && state.detailDraft) {
+          state.detailDraft = {
+            ...state.detailDraft,
+            subtasks: before.subtasks.map((item) => ({ ...item })),
+            done: before.done,
+            dailyCompletedOn: before.dailyCompletedOn || null,
+          };
+          detailDraftRevision += 1;
+          state.detailDirty = true;
+          renderTaskDetail();
+          scheduleDetailSave();
+          setStatus("Subtask change undone.");
+          return;
+        }
+        await saveTodoPatch(
+          todoId,
+          {
+            subtasks: before.subtasks.map((item) => ({ ...item })),
+            done: before.done,
+            dailyCompletedOn: before.dailyCompletedOn || null,
+          },
+          "Subtask change undone."
+        );
+      },
+      commit: async () => Promise.resolve(),
+    });
+  }
 }
 
 function removeDetailSubtask(id) {
@@ -3996,6 +4399,7 @@ function removeDetailSubtask(id) {
     ...state.detailDraft,
     subtasks: (state.detailDraft.subtasks || []).filter((item) => item.id !== id),
   };
+  detailDraftRevision += 1;
   state.detailDraft = syncDraftDoneFromSubtasks(state.detailDraft);
   state.detailDirty = true;
   renderTaskDetail();
@@ -4017,6 +4421,7 @@ function addDetailSubtask() {
       { id: crypto.randomUUID ? crypto.randomUUID() : `sub-${Date.now()}`, text, done: false },
     ],
   };
+  detailDraftRevision += 1;
   state.detailDraft = syncDraftDoneFromSubtasks(state.detailDraft);
   detailSubtaskInput.value = "";
   state.detailDirty = true;
@@ -4059,6 +4464,22 @@ function undoLastAction() {
   finalizePendingUndo(true);
 }
 
+function queueTodoSnapshotUndo(previous, label) {
+  if (!previous?.id) {
+    return;
+  }
+  const snapshot = cloneTodoDraft(previous);
+  setUndoAction({
+    label,
+    durationMs: 10000,
+    rollback: async () => {
+      const { updatedAt: _ignoredUpdatedAt, ...restoredFields } = snapshot;
+      await saveTodoPatch(snapshot.id, restoredFields, "Task completion undone.");
+    },
+    commit: async () => Promise.resolve(),
+  });
+}
+
 function queueClearCompletedUndo(completed) {
   const previousTodos = state.todos.map(cloneTodoDraft);
   const completedIds = new Set(completed.map((todo) => todo.id));
@@ -4078,6 +4499,17 @@ function queueClearCompletedUndo(completed) {
       setStatus("Completed tasks cleared.");
     },
   });
+}
+
+function clearCompletedTasks() {
+  const completed = state.todos.filter((todo) => !todo.daily && Boolean(todo.done));
+  if (!completed.length) {
+    setStatus("No completed tasks to clear.");
+    return;
+  }
+  setStatus("Completed tasks removed.");
+  queueClearCompletedUndo(completed);
+  render();
 }
 
 function queuePlanDeleteUndo(planId) {
@@ -4110,59 +4542,38 @@ async function queuePortfolioDeleteUndo(itemId) {
     return;
   }
   const previousItems = state.portfolioItems.map((entry) => ({ ...entry }));
-  const previousTodos = state.todos.map(cloneTodoDraft);
-  const isProject = item.type === "project";
-  const projectTodoIds = isProject
-    ? state.todos.filter((todo) => todoProjectMatches(todo, item)).map((todo) => todo.id)
-    : [];
   state.portfolioItems = state.portfolioItems.filter((entry) => entry.id !== itemId);
-  if (projectTodoIds.length) {
-    const deletedIds = new Set(projectTodoIds);
-    state.todos = state.todos.filter((todo) => !deletedIds.has(todo.id));
-  }
   if (state.portfolioDetailItemId === itemId) {
     state.portfolioDetailItemId = "";
   }
   render();
-  if (isProject) {
-    try {
-      setStatus(projectTodoIds.length ? "Deleting project and its tasks..." : "Deleting project...");
-      await Promise.all(projectTodoIds.map((todoId) => api(`/todos/${todoId}`, { method: "DELETE" })));
-      await api(`/portfolio/${itemId}`, { method: "DELETE" });
-      state.lastSyncedAt = Date.now();
-      await refreshFromServer(false);
-      setStatus(projectTodoIds.length ? "Project and its tasks deleted." : "Project deleted.");
-    } catch (error) {
-      state.portfolioItems = previousItems;
-      state.todos = previousTodos;
-      render();
-      setStatus(error.message || "Could not delete project.", true);
-    }
-    return;
-  }
   setUndoAction({
-    label: projectTodoIds.length
-      ? `Project deleted with ${projectTodoIds.length} task${projectTodoIds.length === 1 ? "" : "s"}`
-      : "Portfolio item deleted",
+    label: "Portfolio item deleted",
     rollback: () => {
       state.portfolioItems = previousItems;
-      state.todos = previousTodos;
       render();
       setStatus("Delete undone.");
     },
     commit: async () => {
       await api(`/portfolio/${itemId}`, { method: "DELETE" });
-      await Promise.all(projectTodoIds.map((todoId) => api(`/todos/${todoId}`, { method: "DELETE" })));
       state.lastSyncedAt = Date.now();
       render();
-      setStatus(projectTodoIds.length ? "Project and its tasks deleted." : "Portfolio item deleted.");
+      setStatus("Portfolio item deleted.");
     },
   });
 }
 
-async function toggleTodoDone(todoId, nextDone) {
+function toggleTodoDone(todoId, nextDone) {
+  return enqueueTodoMutation(todoId, () => toggleTodoDoneNow(todoId, nextDone));
+}
+
+async function toggleTodoDoneNow(todoId, nextDone) {
   const todo = state.todos.find((entry) => entry.id === todoId);
   if (!todo) {
+    return false;
+  }
+  if (nextDone && todoCompletionBlocked(todo)) {
+    setStatus("Complete every subtask before completing this task.", true);
     return false;
   }
   const previous = cloneTodoDraft(todo);
@@ -4190,19 +4601,10 @@ async function toggleTodoDone(todoId, nextDone) {
     render();
     setUndoAction({
       label: nextDone ? `Đã hoàn thành "${todo.title || 'Task'}"` : `Đã mở lại "${todo.title || 'Task'}"`,
+      durationMs: 10000,
       rollback: async () => {
-        const revertPayload = await api(`/todos/${todo.id}`, {
-          method: "PUT",
-          body: serializeTodoForApi(previous),
-        });
-        const reverted = hydrateTodoFromServer(revertPayload.todo);
-        updateTodo(reverted);
-        if (state.detailTaskId === todo.id) {
-          state.detailDraft = cloneTodoDraft(reverted);
-        }
-        state.lastSyncedAt = Date.now();
-        render();
-        setStatus("Đã hoàn tác trạng thái task.");
+        const { updatedAt: _ignoredUpdatedAt, ...restoredFields } = previous;
+        await saveTodoPatch(todo.id, restoredFields, "Đã hoàn tác trạng thái task.");
       },
       commit: async () => Promise.resolve(),
     });

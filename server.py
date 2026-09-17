@@ -61,7 +61,7 @@ mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 
 def now_iso() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def get_connection() -> sqlite3.Connection:
@@ -513,6 +513,10 @@ def normalize_subtasks(value: object) -> list[dict]:
     return normalized
 
 
+def has_incomplete_subtasks(subtasks: list[dict]) -> bool:
+    return bool(subtasks) and any(not bool(item.get("done")) for item in subtasks)
+
+
 def normalize_weekly_days(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -819,6 +823,9 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
         if route == "/api/todos/reorder":
             self.handle_reorder_todos()
+            return
+        if route == "/api/todos/batch-completion":
+            self.handle_batch_todo_completion()
             return
         if route == "/api/plans":
             self.handle_create_plan()
@@ -1561,6 +1568,12 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
         if daily:
             lane = "today"
+        if daily and daily_completed_on and has_incomplete_subtasks(subtasks):
+            self.respond_json(
+                {"error": "Complete every subtask before completing this task."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
         if daily_completed_on and not is_valid_date(daily_completed_on):
             self.respond_json({"error": "Daily completion date is invalid."}, HTTPStatus.BAD_REQUEST)
             return
@@ -1645,6 +1658,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         done = 1 if bool(payload.get("done")) else 0
         daily = 1 if bool(payload.get("daily")) else 0
         daily_completed_on = str(payload.get("dailyCompletedOn") or "").strip() or None
+        expected_updated_at = str(payload.get("expectedUpdatedAt") or "").strip()
         try:
             subtasks = normalize_subtasks(payload.get("subtasks"))
             sort_order = normalize_sort_order(payload.get("sortOrder"), 0)
@@ -1661,6 +1675,13 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         if daily:
             lane = "today"
             done = 0
+        completes_now = bool(done) or (bool(daily) and bool(daily_completed_on))
+        if completes_now and has_incomplete_subtasks(subtasks):
+            self.respond_json(
+                {"error": "Complete every subtask before completing this task."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
         if daily_completed_on and not is_valid_date(daily_completed_on):
             self.respond_json({"error": "Daily completion date is invalid."}, HTTPStatus.BAD_REQUEST)
             return
@@ -1693,12 +1714,27 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         except PermissionError:
             return
 
+        existing = connection.execute(
+            "SELECT updated_at FROM todos WHERE id = ? AND user_id = ?",
+            (todo_id, user["id"]),
+        ).fetchone()
+        if not existing:
+            connection.close()
+            self.respond_json({"error": "Task not found."}, HTTPStatus.NOT_FOUND)
+            return
+        if expected_updated_at and expected_updated_at != str(existing["updated_at"] or ""):
+            connection.close()
+            self.respond_json(
+                {"error": "Task changed on another device. Refresh and try again."},
+                HTTPStatus.CONFLICT,
+            )
+            return
         with connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE todos
                 SET title = ?, details = ?, subtasks = ?, due_date = ?, lane = ?, sort_order = ?, priority = ?, done = ?, daily = ?, daily_completed_on = ?, streak = ?, daily_reset_after_days = ?, project_id = ?, project_title = ?, weekly_days = ?, missed = ?, updated_at = ?
-                WHERE id = ? AND user_id = ?
+                WHERE id = ? AND user_id = ? AND (? = '' OR updated_at = ?)
                 """,
                 (
                     title,
@@ -1720,12 +1756,20 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                     now_iso(),
                     todo_id,
                     user["id"],
+                    expected_updated_at,
+                    expected_updated_at,
                 ),
             )
-            todo = connection.execute("SELECT * FROM todos WHERE id = ? AND user_id = ?", (todo_id, user["id"])).fetchone()
+            todo = connection.execute(
+                "SELECT * FROM todos WHERE id = ? AND user_id = ?",
+                (todo_id, user["id"]),
+            ).fetchone() if cursor.rowcount == 1 else None
         connection.close()
-        if not todo:
-            self.respond_json({"error": "Task not found."}, HTTPStatus.NOT_FOUND)
+        if cursor.rowcount != 1:
+            self.respond_json(
+                {"error": "Task changed on another device. Refresh and try again."},
+                HTTPStatus.CONFLICT,
+            )
             return
         self.respond_json({"todo": serialize_todo(todo)})
 
@@ -1735,7 +1779,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         except PermissionError:
             return
         existing = connection.execute(
-            "SELECT daily FROM todos WHERE id = ? AND user_id = ?",
+            "SELECT daily, subtasks FROM todos WHERE id = ? AND user_id = ?",
             (todo_id, user["id"]),
         ).fetchone()
         if not existing:
@@ -1745,6 +1789,17 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         if existing["daily"]:
             connection.close()
             self.respond_json({"error": "Daily tasks cannot be moved by lane."}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            existing_subtasks = normalize_subtasks(json.loads(existing["subtasks"] or "[]"))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            existing_subtasks = []
+        if lane == "done" and has_incomplete_subtasks(existing_subtasks):
+            connection.close()
+            self.respond_json(
+                {"error": "Complete every subtask before completing this task."},
+                HTTPStatus.BAD_REQUEST,
+            )
             return
         done = 1 if lane == "done" else 0
         with connection:
@@ -1797,22 +1852,23 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                 if lane not in {"ideas", "month", "week", "today", "done"}:
                     raise ValueError("Lane is invalid.")
                 normalized_updates.append(
-                    (
-                        todo_id,
-                        lane,
-                        normalize_sort_order(item.get("sortOrder"), 0),
-                        1 if bool(item.get("done")) else 0,
-                    )
+                    {
+                        "id": todo_id,
+                        "lane": lane,
+                        "sortOrder": normalize_sort_order(item.get("sortOrder"), 0),
+                        "done": 1 if bool(item.get("done")) else 0,
+                        "expectedUpdatedAt": str(item.get("expectedUpdatedAt") or "").strip(),
+                    }
                 )
         except ValueError as error:
             connection.close()
             self.respond_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
             return
 
-        for todo_id, _, _, _ in normalized_updates:
+        for update in normalized_updates:
             existing = connection.execute(
-                "SELECT daily FROM todos WHERE id = ? AND user_id = ?",
-                (todo_id, user["id"]),
+                "SELECT daily, subtasks, updated_at FROM todos WHERE id = ? AND user_id = ?",
+                (update["id"], user["id"]),
             ).fetchone()
             if not existing:
                 connection.close()
@@ -1822,23 +1878,177 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                 connection.close()
                 self.respond_json({"error": "Daily tasks cannot be reordered."}, HTTPStatus.BAD_REQUEST)
                 return
+            expected_updated_at = update["expectedUpdatedAt"]
+            if expected_updated_at and expected_updated_at != str(existing["updated_at"] or ""):
+                connection.close()
+                self.respond_json(
+                    {"error": "Task changed on another device. Refresh and try again."},
+                    HTTPStatus.CONFLICT,
+                )
+                return
+            try:
+                existing_subtasks = normalize_subtasks(json.loads(existing["subtasks"] or "[]"))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                existing_subtasks = []
+            if update["done"] and has_incomplete_subtasks(existing_subtasks):
+                connection.close()
+                self.respond_json(
+                    {"error": "Complete every subtask before completing this task."},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
 
-        with connection:
-            for todo_id, lane, sort_order, done in normalized_updates:
-                connection.execute(
+        try:
+            with connection:
+                timestamp = now_iso()
+                for update in normalized_updates:
+                    cursor = connection.execute(
                     """
                     UPDATE todos
                     SET lane = ?, sort_order = ?, done = ?, updated_at = ?
-                    WHERE id = ? AND user_id = ?
+                    WHERE id = ? AND user_id = ? AND (? = '' OR updated_at = ?)
                     """,
-                    (lane, sort_order, done, now_iso(), todo_id, user["id"]),
+                    (
+                        update["lane"],
+                        update["sortOrder"],
+                        update["done"],
+                        timestamp,
+                        update["id"],
+                        user["id"],
+                        update["expectedUpdatedAt"],
+                        update["expectedUpdatedAt"],
+                    ),
                 )
-            todos = connection.execute(
-                "SELECT * FROM todos WHERE user_id = ? ORDER BY lane, sort_order ASC, created_at DESC",
-                (user["id"],),
-            ).fetchall()
+                    if cursor.rowcount != 1:
+                        raise RuntimeError("Task changed on another device. Refresh and try again.")
+                todos = connection.execute(
+                    "SELECT * FROM todos WHERE user_id = ? ORDER BY lane, sort_order ASC, created_at DESC",
+                    (user["id"],),
+                ).fetchall()
+        except RuntimeError as error:
+            connection.close()
+            self.respond_json({"error": str(error)}, HTTPStatus.CONFLICT)
+            return
         connection.close()
         self.respond_json({"todos": [serialize_todo(row) for row in todos]})
+
+    def handle_batch_todo_completion(self) -> None:
+        try:
+            payload = self.parse_json()
+        except ValueError:
+            return
+        updates = payload.get("updates")
+        if not isinstance(updates, list) or not updates:
+            self.respond_json({"error": "Updates are required."}, HTTPStatus.BAD_REQUEST)
+            return
+        if len(updates) > 100:
+            self.respond_json({"error": "Too many updates."}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            connection, user = self.auth_user()
+        except PermissionError:
+            return
+
+        normalized = []
+        seen_ids = set()
+        try:
+            for item in updates:
+                if not isinstance(item, dict):
+                    raise ValueError("Each update must be an object.")
+                todo_id = str(item.get("id") or "").strip()
+                if not re.fullmatch(r"[a-f0-9-]+", todo_id) or todo_id in seen_ids:
+                    raise ValueError("Todo id is invalid or duplicated.")
+                seen_ids.add(todo_id)
+                daily_completed_on = str(item.get("dailyCompletedOn") or "").strip() or None
+                if daily_completed_on and not is_valid_date(daily_completed_on):
+                    raise ValueError("Daily completion date is invalid.")
+                streak = int(item.get("streak") or 0)
+                if streak < 0 or streak > 100000:
+                    raise ValueError("Streak is invalid.")
+                normalized.append(
+                    {
+                        "id": todo_id,
+                        "done": bool(item.get("done")),
+                        "dailyCompletedOn": daily_completed_on,
+                        "streak": streak,
+                        "expectedUpdatedAt": str(item.get("expectedUpdatedAt") or "").strip(),
+                    }
+                )
+        except (TypeError, ValueError) as error:
+            connection.close()
+            self.respond_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            return
+
+        try:
+            with connection:
+                rows = {}
+                for update in normalized:
+                    row = connection.execute(
+                        "SELECT * FROM todos WHERE id = ? AND user_id = ?",
+                        (update["id"], user["id"]),
+                    ).fetchone()
+                    if not row:
+                        raise LookupError("Task not found.")
+                    rows[update["id"]] = row
+
+                for update in normalized:
+                    row = rows[update["id"]]
+                    expected = update["expectedUpdatedAt"]
+                    if expected and expected != str(row["updated_at"] or ""):
+                        raise RuntimeError("Task changed on another device. Refresh and try again.")
+                    try:
+                        subtasks = normalize_subtasks(json.loads(row["subtasks"] or "[]"))
+                    except (ValueError, TypeError, json.JSONDecodeError):
+                        subtasks = []
+                    daily = bool(row["daily"])
+                    completes_now = update["done"] or (daily and bool(update["dailyCompletedOn"]))
+                    if completes_now and has_incomplete_subtasks(subtasks):
+                        raise ValueError("Complete every subtask before completing this task.")
+
+                timestamp = now_iso()
+                for update in normalized:
+                    row = rows[update["id"]]
+                    daily = bool(row["daily"])
+                    cursor = connection.execute(
+                        """
+                        UPDATE todos
+                        SET done = ?, daily_completed_on = ?, streak = ?, updated_at = ?
+                        WHERE id = ? AND user_id = ? AND (? = '' OR updated_at = ?)
+                        """,
+                        (
+                            0 if daily else (1 if update["done"] else 0),
+                            update["dailyCompletedOn"] if daily else None,
+                            update["streak"] if daily else int(row["streak"] or 0),
+                            timestamp,
+                            update["id"],
+                            user["id"],
+                            update["expectedUpdatedAt"],
+                            update["expectedUpdatedAt"],
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        raise RuntimeError("Task changed on another device. Refresh and try again.")
+        except LookupError as error:
+            connection.close()
+            self.respond_json({"error": str(error)}, HTTPStatus.NOT_FOUND)
+            return
+        except RuntimeError as error:
+            connection.close()
+            self.respond_json({"error": str(error)}, HTTPStatus.CONFLICT)
+            return
+        except ValueError as error:
+            connection.close()
+            self.respond_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            return
+
+        placeholders = ",".join("?" for _ in normalized)
+        rows = connection.execute(
+            f"SELECT * FROM todos WHERE user_id = ? AND id IN ({placeholders})",
+            (user["id"], *(update["id"] for update in normalized)),
+        ).fetchall()
+        connection.close()
+        by_id = {row["id"]: serialize_todo(row) for row in rows}
+        self.respond_json({"todos": [by_id[update["id"]] for update in normalized]})
 
     def handle_clear_completed_todos(self) -> None:
         try:

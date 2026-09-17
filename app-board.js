@@ -91,9 +91,10 @@
       },
       { total: 0, done: 0 }
     );
+    const isDone = typeof isDoneFn === "function" ? isDoneFn : (todo) => Boolean(todo && todo.done);
     return {
       ...totals,
-      complete: totals.total > 0 && totals.done === totals.total,
+      complete: (todos || []).length > 0 && (todos || []).every(isDone),
     };
   }
 

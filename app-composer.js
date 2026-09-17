@@ -10,6 +10,7 @@
     }
     if (dom.undoToastLabel) dom.undoToastLabel.textContent = state.undoAction.label;
     if (dom.undoToastProgress) {
+      dom.undoToastProgress.style.setProperty("--undo-duration", `${Number(state.undoAction.durationMs || 5000)}ms`);
       dom.undoToastProgress.classList.remove("is-running");
       void dom.undoToastProgress.offsetWidth;
       dom.undoToastProgress.classList.add("is-running");
@@ -26,6 +27,10 @@
     if (dom.detailHeading) dom.detailHeading.textContent = draft.title || "Task details";
     if (dom.toggleTaskDoneButton) {
       dom.toggleTaskDoneButton.textContent = draft.daily ? "Complete Today" : draft.done ? "Mark Active" : "Mark Done";
+      const subtasks = Array.isArray(draft.subtasks) ? draft.subtasks : [];
+      const completionBlocked = subtasks.length > 0 && !subtasks.every((subtask) => Boolean(subtask.done));
+      dom.toggleTaskDoneButton.disabled = completionBlocked && !draft.done;
+      dom.toggleTaskDoneButton.title = completionBlocked ? "Complete every subtask first" : "";
     }
     if (dom.detailSaveState) {
       dom.detailSaveState.textContent = (state && state.detailSaving)
@@ -131,13 +136,19 @@
     const lanes = (utils && utils.BOARD_LANES) || ["ideas", "month", "daily", "done"];
     const currentLane = utils && typeof utils.boardLane === "function" ? utils.boardLane(todo) : todo.lane;
     const laneLabel = (utils && utils.laneLabel) || ((l) => l);
+    const completionBlocked = Boolean(
+      utils && typeof utils.todoCompletionBlocked === "function" && utils.todoCompletionBlocked(todo)
+    );
 
     lanes.forEach((lane) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = `task-action-move-list__button${currentLane === lane ? " is-active" : ""}`;
       button.textContent = laneLabel(lane);
-      button.disabled = currentLane === lane || (lane === "daily" && !todo.daily);
+      button.disabled = currentLane === lane || (lane === "daily" && !todo.daily) || (lane === "done" && completionBlocked);
+      if (lane === "done" && completionBlocked) {
+        button.title = "Complete every subtask first";
+      }
       button.addEventListener("click", () => {
         if (typeof onClose === "function") onClose();
         if (currentLane !== lane && !(lane === "daily" && !todo.daily)) {

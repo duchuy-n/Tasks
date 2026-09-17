@@ -524,7 +524,7 @@
         <span id="undoToastLabel" class="undo-toast__label">Hành động đã hoàn thành</span>
       </div>
       <div class="undo-toast__actions">
-        <button id="undoToastButton" class="undo-toast__btn" type="button">Hoàn tác</button>
+        <button id="undoToastButton" class="undo-toast__btn" type="button" title="Keyboard shortcut: Ctrl+Z">Undo · Ctrl Z</button>
         <button id="undoToastDismiss" class="undo-toast__close" type="button" aria-label="Đóng">&times;</button>
       </div>
     </div>
@@ -766,6 +766,8 @@
           <span class="task-card__streak"></span>
         </div>
       </div>
+      <ul class="task-card__subtask-list" aria-label="Subtasks"></ul>
+      <button class="task-card__subtask-toggle-list" type="button" hidden></button>
       <div class="task-card__quick-actions" role="toolbar" aria-label="Thao tác nhanh">
         <button class="task-card__quick-btn task-card__quick-btn--today" type="button" title="Đặt deadline hôm nay (Due Today)" aria-label="Đặt deadline hôm nay">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

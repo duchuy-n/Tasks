@@ -156,6 +156,21 @@
     return subtasks.length > 0 && subtasks.every((subtask) => Boolean(subtask.done));
   }
 
+  function todoCompletionBlocked(todo) {
+    const subtasks = Array.isArray(todo?.subtasks) ? todo.subtasks : [];
+    return subtasks.length > 0 && !subtasks.every((subtask) => Boolean(subtask.done));
+  }
+
+  function reconcileTodoDoneWithSubtasks(todo) {
+    if (!todo || !todoCompletionBlocked(todo)) {
+      return todo;
+    }
+    if (todo.daily) {
+      return { ...todo, dailyCompletedOn: null };
+    }
+    return { ...todo, done: false };
+  }
+
   const api = {
     LANES,
     LANE_PREFIX,
@@ -176,6 +191,8 @@
     DEFAULT_DAILY_RESET_AFTER_DAYS,
     normalizeDailyResetAfterDays,
     todoSubtasksComplete,
+    todoCompletionBlocked,
+    reconcileTodoDoneWithSubtasks,
   };
 
   if (typeof module !== "undefined" && module.exports) {

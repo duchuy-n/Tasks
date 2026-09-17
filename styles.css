@@ -2447,7 +2447,7 @@ textarea {
 }
 
 .undo-toast__progress.is-running {
-  animation: undoCountdownProgress 5000ms linear forwards;
+  animation: undoCountdownProgress var(--undo-duration, 5000ms) linear forwards;
 }
 
 @keyframes undoCountdownProgress {
@@ -4144,6 +4144,118 @@ select:focus {
   font-family: var(--mono-font);
   font-size: 0.68rem;
   font-weight: 600;
+}
+
+.task-card__subtasks.is-ready {
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.13);
+  border-color: rgba(16, 185, 129, 0.28);
+}
+
+.task-card__subtask-list {
+  grid-column: 2 / -1;
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  margin: 2px 0 0;
+  padding: 9px 0 0;
+  list-style: none;
+  border-top: 1px solid rgba(140, 160, 220, 0.12);
+}
+
+.task-card__subtask-list[hidden],
+.task-card__subtask-list:empty {
+  display: none;
+}
+
+.task-card__subtask-toggle-list {
+  grid-column: 2 / -1;
+  justify-self: start;
+  margin: 2px 0 0;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--board-muted);
+  font: 600 0.68rem/1.2 var(--ui-font);
+  cursor: pointer;
+}
+
+.task-card__subtask-toggle-list:hover,
+.task-card__subtask-toggle-list:focus-visible {
+  background: var(--accent-soft);
+  color: #c4b5fd;
+}
+
+.task-card__subtask-toggle-list[hidden] {
+  display: none;
+}
+
+.task-card__subtask-item {
+  min-width: 0;
+  border-radius: 8px;
+  background: rgba(9, 15, 29, 0.36);
+  transition: background 150ms ease, opacity 150ms ease;
+}
+
+.task-card__subtask-item:hover {
+  background: rgba(139, 92, 246, 0.09);
+}
+
+.task-card__subtask-label {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 7px 8px;
+  cursor: pointer;
+}
+
+.task-card__subtask-toggle {
+  width: 14px;
+  height: 14px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.task-card__subtask-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--board-text);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.task-card__subtask-parent {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--board-text-strong);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.task-card__subtask-item.is-done {
+  opacity: 0.64;
+}
+
+.task-card__subtask-item.is-done .task-card__subtask-text {
+  color: var(--board-muted);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.task-card.is-completion-locked .task-card__check {
+  cursor: not-allowed;
+}
+
+.task-card__toggle:disabled + .task-card__dot {
+  border-color: color-mix(in srgb, var(--board-muted) 58%, transparent);
+  background:
+    linear-gradient(135deg, transparent 42%, color-mix(in srgb, var(--board-muted) 62%, transparent) 43% 57%, transparent 58%);
+  opacity: 0.72;
 }
 
 .task-card__due {

@@ -179,6 +179,301 @@ class PlanboardServerTest(unittest.TestCase):
         self.assertEqual(status, HTTPStatus.BAD_REQUEST)
         self.assertEqual(payload["error"], "Daily tasks cannot be reordered.")
 
+    def test_subtasks_must_be_completed_before_parent_task(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Subtask User", "email": "subtasks@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos",
+            {
+                "title": "Parent task",
+                "details": "",
+                "lane": "ideas",
+                "priority": "medium",
+                "subtasks": [
+                    {"id": "sub-1", "text": "First step", "done": True},
+                    {"id": "sub-2", "text": "Second step", "done": False},
+                ],
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        todo = payload["todo"]
+
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/todos/{todo['id']}",
+            {**todo, "done": True},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+        self.assertEqual(payload["error"], "Complete every subtask before completing this task.")
+
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/todos/{todo['id']}/lane/done",
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+
+        completed_subtasks = [
+            {"id": "sub-1", "text": "First step", "done": True},
+            {"id": "sub-2", "text": "Second step", "done": True},
+        ]
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/todos/{todo['id']}",
+            {**todo, "subtasks": completed_subtasks, "done": False},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertFalse(payload["todo"]["done"])
+
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/todos/{todo['id']}",
+            {**payload["todo"], "done": True},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertTrue(payload["todo"]["done"])
+
+    def test_daily_completion_requires_all_subtasks(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Daily Steps", "email": "daily-steps@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+        pending_subtasks = [
+            {"id": "step-1", "text": "First step", "done": True},
+            {"id": "step-2", "text": "Second step", "done": False},
+        ]
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos",
+            {
+                "title": "Daily routine",
+                "daily": True,
+                "dailyCompletedOn": "2026-09-18",
+                "subtasks": pending_subtasks,
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+        self.assertEqual(payload["error"], "Complete every subtask before completing this task.")
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos",
+            {
+                "title": "Daily routine",
+                "daily": True,
+                "subtasks": pending_subtasks,
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        todo = payload["todo"]
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/todos/{todo['id']}",
+            {**todo, "dailyCompletedOn": "2026-09-18"},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+        self.assertEqual(payload["error"], "Complete every subtask before completing this task.")
+
+    def test_project_batch_completion_is_atomic_and_versioned(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Batch User", "email": "batch@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+        todos = []
+        for title, subtasks in (
+            ("Ready task", []),
+            ("Blocked task", [{"id": "step", "text": "Pending", "done": False}]),
+        ):
+            status, _, created = self.request(
+                "POST",
+                "/api/todos",
+                {"title": title, "projectId": "project-atomic", "projectTitle": "Atomic", "subtasks": subtasks},
+                token=token,
+            )
+            self.assertEqual(status, HTTPStatus.CREATED)
+            todos.append(created["todo"])
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos/batch-completion",
+            {
+                "updates": [
+                    {
+                        "id": todo["id"],
+                        "done": True,
+                        "expectedUpdatedAt": todo["updatedAt"],
+                    }
+                    for todo in todos
+                ]
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+
+        status, _, bootstrap = self.request("GET", "/api/bootstrap", token=token)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertTrue(all(not todo["done"] for todo in bootstrap["todos"]))
+
+        blocked = next(todo for todo in bootstrap["todos"] if todo["title"] == "Blocked task")
+        status, _, updated = self.request(
+            "PUT",
+            f"/api/todos/{blocked['id']}",
+            {
+                **blocked,
+                "subtasks": [{"id": "step", "text": "Pending", "done": True}],
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+
+        status, _, bootstrap = self.request("GET", "/api/bootstrap", token=token)
+        current = bootstrap["todos"]
+        stale_versions = {todo["id"]: todo["updatedAt"] for todo in current}
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos/batch-completion",
+            {
+                "updates": [
+                    {
+                        "id": todo["id"],
+                        "done": True,
+                        "expectedUpdatedAt": todo["updatedAt"],
+                    }
+                    for todo in current
+                ]
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertTrue(all(todo["done"] for todo in payload["todos"]))
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos/batch-completion",
+            {
+                "updates": [
+                    {
+                        "id": todo["id"],
+                        "done": False,
+                        "expectedUpdatedAt": stale_versions[todo["id"]],
+                    }
+                    for todo in current
+                ]
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CONFLICT)
+        status, _, bootstrap = self.request("GET", "/api/bootstrap", token=token)
+        self.assertTrue(all(todo["done"] for todo in bootstrap["todos"]))
+
+    def test_clear_completed_keeps_completed_daily_routines(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Clear User", "email": "clear@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+        status, _, daily = self.request(
+            "POST",
+            "/api/todos",
+            {"title": "Daily", "daily": True, "dailyCompletedOn": "2026-09-18", "streak": 4},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        status, _, regular = self.request(
+            "POST",
+            "/api/todos",
+            {"title": "Finished once"},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        status, _, regular = self.request(
+            "PUT",
+            f"/api/todos/{regular['todo']['id']}",
+            {**regular["todo"], "done": True},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+
+        status, _, _ = self.request("POST", "/api/todos/clear-completed", {}, token=token)
+        self.assertEqual(status, HTTPStatus.OK)
+        status, _, bootstrap = self.request("GET", "/api/bootstrap", token=token)
+        self.assertEqual([todo["id"] for todo in bootstrap["todos"]], [daily["todo"]["id"]])
+
+    def test_reorder_rejects_stale_versions_without_partial_updates(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Reorder User", "email": "reorder@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+        created = []
+        for title in ("First", "Second"):
+            status, _, payload = self.request("POST", "/api/todos", {"title": title}, token=token)
+            self.assertEqual(status, HTTPStatus.CREATED)
+            created.append(payload["todo"])
+
+        stale_first = created[0]
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/todos/{stale_first['id']}",
+            {**stale_first, "details": "Changed elsewhere"},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos/reorder",
+            {
+                "updates": [
+                    {
+                        "id": created[0]["id"],
+                        "lane": "month",
+                        "sortOrder": 1024,
+                        "done": False,
+                        "expectedUpdatedAt": stale_first["updatedAt"],
+                    },
+                    {
+                        "id": created[1]["id"],
+                        "lane": "month",
+                        "sortOrder": 2048,
+                        "done": False,
+                        "expectedUpdatedAt": created[1]["updatedAt"],
+                    },
+                ]
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CONFLICT)
+        status, _, bootstrap = self.request("GET", "/api/bootstrap", token=token)
+        by_id = {todo["id"]: todo for todo in bootstrap["todos"]}
+        self.assertEqual(by_id[created[0]["id"]]["lane"], "ideas")
+        self.assertEqual(by_id[created[1]["id"]]["lane"], "ideas")
+
     def test_project_todo_metadata_uses_explicit_fields(self) -> None:
         status, _, payload = self.request(
             "POST",

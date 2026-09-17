@@ -237,6 +237,10 @@
     }).filter(Boolean);
   }
 
+  function hasIncompleteSubtasks(subtasks) {
+    return Array.isArray(subtasks) && subtasks.length > 0 && subtasks.some((item) => !item.done);
+  }
+
   function normalizeWeeklyDays(value) {
     if (!Array.isArray(value)) {
       return [];
@@ -835,6 +839,10 @@
     const finalLane = daily ? "today" : lane;
     const done = daily ? false : Boolean(body.done);
     const subtasks = normalizeSubtasks(body.subtasks);
+    const completesNow = done || (daily && Boolean(dailyCompletedOn));
+    if (completesNow && hasIncompleteSubtasks(subtasks)) {
+      throw createError("Complete every subtask before completing this task.", 400);
+    }
     const sortOrder = normalizeSortOrder(body.sortOrder, 0);
     const projectId = String(body.projectId || "").trim().slice(0, 160);
     const projectTitle = String(body.projectTitle || "").trim().slice(0, 160);
@@ -899,11 +907,16 @@
     const priority = String(body.priority || "medium").trim().toLowerCase();
     const daily = Boolean(body.daily);
     const dailyCompletedOn = body.dailyCompletedOn == null ? null : normalizeDateInput(body.dailyCompletedOn) || null;
+    const expectedUpdatedAt = String(body.expectedUpdatedAt || "").trim();
     const streak = Number(body.streak || 0);
     const dailyResetAfterDays = normalizeDailyResetAfterDays(body.dailyResetAfterDays);
     const finalLane = daily ? "today" : lane;
     const done = daily ? false : Boolean(body.done);
     const subtasks = normalizeSubtasks(body.subtasks);
+    const completesNow = done || (daily && Boolean(dailyCompletedOn));
+    if (completesNow && hasIncompleteSubtasks(subtasks)) {
+      throw createError("Complete every subtask before completing this task.", 400);
+    }
     const sortOrder = normalizeSortOrder(body.sortOrder, 0);
     const projectId = String(body.projectId || "").trim().slice(0, 160);
     const projectTitle = String(body.projectTitle || "").trim().slice(0, 160);
@@ -933,33 +946,40 @@
 
     const user = await requireUser(client);
     const ref = todoDocRef(client, user.uid, todoId);
-    const snapshot = await client.firestoreMod.getDoc(ref);
-    if (!snapshot.exists()) {
-      throw createError("Task not found.", 404);
-    }
-    const previous = snapshot.data() || {};
-    const todo = {
-      id: todoId,
-      title,
-      details,
-      subtasks,
-      dueDate,
-      lane: finalLane,
-      sortOrder: sortOrder || await currentOrNextSortOrder(client, user.uid, todoId, finalLane),
-      priority,
-      done,
-      daily,
-      dailyCompletedOn,
-      streak,
-      dailyResetAfterDays,
-      projectId,
-      projectTitle,
-      weeklyDays,
-      missed,
-      createdAt: String(previous.createdAt || nowIso()),
-      updatedAt: nowIso(),
-    };
-    await client.firestoreMod.setDoc(ref, todo);
+    const resolvedSortOrder = sortOrder || await currentOrNextSortOrder(client, user.uid, todoId, finalLane);
+    let todo = null;
+    await client.firestoreMod.runTransaction(client.db, async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists()) {
+        throw createError("Task not found.", 404);
+      }
+      const previous = snapshot.data() || {};
+      if (expectedUpdatedAt && expectedUpdatedAt !== String(previous.updatedAt || "")) {
+        throw createError("Task changed on another device. Refresh and try again.", 409);
+      }
+      todo = {
+        id: todoId,
+        title,
+        details,
+        subtasks,
+        dueDate,
+        lane: finalLane,
+        sortOrder: resolvedSortOrder,
+        priority,
+        done,
+        daily,
+        dailyCompletedOn,
+        streak,
+        dailyResetAfterDays,
+        projectId,
+        projectTitle,
+        weeklyDays,
+        missed,
+        createdAt: String(previous.createdAt || nowIso()),
+        updatedAt: nowIso(),
+      };
+      transaction.set(ref, todo);
+    });
     return { todo };
   }
 
@@ -973,6 +993,9 @@
     const previous = normalizeExistingTodoData(todoId, snapshot.data() || {});
     if (previous.daily) {
       throw createError("Daily tasks cannot be moved by lane.", 400);
+    }
+    if (lane === "done" && hasIncompleteSubtasks(previous.subtasks)) {
+      throw createError("Complete every subtask before completing this task.", 400);
     }
     const todo = {
       ...previous,
@@ -1014,33 +1037,42 @@
         lane,
         sortOrder,
         done,
+        expectedUpdatedAt: String(item.expectedUpdatedAt || "").trim(),
       };
     });
-    const snapshots = await Promise.all(
-      normalizedUpdates.map((update) => client.firestoreMod.getDoc(todoDocRef(client, user.uid, update.todoId)))
-    );
-    const batch = client.firestoreMod.writeBatch(client.db);
-    normalizedUpdates.forEach((update, index) => {
-      const snapshot = snapshots[index];
-      if (!snapshot.exists()) {
-        throw createError("Task not found.", 404);
-      }
-      const previous = normalizeExistingTodoData(update.todoId, snapshot.data() || {});
-      if (previous.daily) {
-        throw createError("Daily tasks cannot be reordered.", 400);
-      }
-      batch.set(
-        todoDocRef(client, user.uid, update.todoId),
-        {
+    await client.firestoreMod.runTransaction(client.db, async (transaction) => {
+      const refs = normalizedUpdates.map((update) => todoDocRef(client, user.uid, update.todoId));
+      const snapshots = await Promise.all(refs.map((ref) => transaction.get(ref)));
+      const previousTodos = snapshots.map((snapshot, index) => {
+        if (!snapshot.exists()) {
+          throw createError("Task not found.", 404);
+        }
+        return normalizeExistingTodoData(normalizedUpdates[index].todoId, snapshot.data() || {});
+      });
+      normalizedUpdates.forEach((update, index) => {
+        const previous = previousTodos[index];
+        if (previous.daily) {
+          throw createError("Daily tasks cannot be reordered.", 400);
+        }
+        if (update.expectedUpdatedAt && update.expectedUpdatedAt !== String(previous.updatedAt || "")) {
+          throw createError("Task changed on another device. Refresh and try again.", 409);
+        }
+        if (update.done && hasIncompleteSubtasks(previous.subtasks)) {
+          throw createError("Complete every subtask before completing this task.", 400);
+        }
+      });
+      const timestamp = nowIso();
+      previousTodos.forEach((previous, index) => {
+        const update = normalizedUpdates[index];
+        transaction.set(refs[index], {
           ...previous,
           lane: update.lane,
           sortOrder: update.sortOrder,
           done: update.done,
-          updatedAt: nowIso(),
-        }
-      );
+          updatedAt: timestamp,
+        });
+      });
     });
-    await batch.commit();
     const todos = await getAllTodos(client, user.uid);
     todos.sort((left, right) =>
       String(left.lane || "").localeCompare(String(right.lane || "")) ||
@@ -1048,6 +1080,83 @@
       compareCreatedDesc(left, right)
     );
     return { todos };
+  }
+
+  async function handleBatchTodoCompletion(client, options) {
+    const body = requireBody(options);
+    const updates = body.updates;
+    if (!Array.isArray(updates) || !updates.length) {
+      throw createError("Updates are required.", 400);
+    }
+    if (updates.length > 100) {
+      throw createError("Too many updates.", 400);
+    }
+    const seenIds = new Set();
+    const normalizedUpdates = updates.map((item) => {
+      if (!item || typeof item !== "object") {
+        throw createError("Each update must be an object.", 400);
+      }
+      const id = String(item.id || "").trim();
+      if (!/^[A-Za-z0-9_-]+$/.test(id) || seenIds.has(id)) {
+        throw createError("Todo id is invalid or duplicated.", 400);
+      }
+      seenIds.add(id);
+      const dailyCompletedOn = item.dailyCompletedOn == null
+        ? null
+        : normalizeDateInput(item.dailyCompletedOn) || null;
+      const streak = Number(item.streak || 0);
+      if (dailyCompletedOn && !isValidDate(dailyCompletedOn)) {
+        throw createError("Daily completion date is invalid.", 400);
+      }
+      if (!Number.isInteger(streak) || streak < 0 || streak > 100000) {
+        throw createError("Streak is invalid.", 400);
+      }
+      return {
+        id,
+        done: Boolean(item.done),
+        dailyCompletedOn,
+        streak,
+        expectedUpdatedAt: String(item.expectedUpdatedAt || "").trim(),
+      };
+    });
+
+    const user = await requireUser(client);
+    let savedTodos = [];
+    await client.firestoreMod.runTransaction(client.db, async (transaction) => {
+      const refs = normalizedUpdates.map((update) => todoDocRef(client, user.uid, update.id));
+      const snapshots = await Promise.all(refs.map((ref) => transaction.get(ref)));
+      const previousTodos = snapshots.map((snapshot, index) => {
+        if (!snapshot.exists()) {
+          throw createError("Task not found.", 404);
+        }
+        return normalizeExistingTodoData(normalizedUpdates[index].id, snapshot.data() || {});
+      });
+
+      normalizedUpdates.forEach((update, index) => {
+        const previous = previousTodos[index];
+        if (update.expectedUpdatedAt && update.expectedUpdatedAt !== String(previous.updatedAt || "")) {
+          throw createError("Task changed on another device. Refresh and try again.", 409);
+        }
+        const completesNow = update.done || (previous.daily && Boolean(update.dailyCompletedOn));
+        if (completesNow && hasIncompleteSubtasks(previous.subtasks)) {
+          throw createError("Complete every subtask before completing this task.", 400);
+        }
+      });
+
+      const timestamp = nowIso();
+      savedTodos = previousTodos.map((previous, index) => {
+        const update = normalizedUpdates[index];
+        return {
+          ...previous,
+          done: previous.daily ? false : update.done,
+          dailyCompletedOn: previous.daily ? update.dailyCompletedOn : null,
+          streak: previous.daily ? update.streak : Number(previous.streak || 0),
+          updatedAt: timestamp,
+        };
+      });
+      savedTodos.forEach((todo, index) => transaction.set(refs[index], todo));
+    });
+    return { todos: savedTodos };
   }
 
   async function handleClearCompleted(client) {
@@ -1133,6 +1242,9 @@
       }
       if (path === "/todos/reorder" && (options.method || "GET") === "POST") {
         return handleReorderTodos(client, options);
+      }
+      if (path === "/todos/batch-completion" && (options.method || "GET") === "POST") {
+        return handleBatchTodoCompletion(client, options);
       }
       if (path === "/todos/clear-completed" && (options.method || "GET") === "POST") {
         return handleClearCompleted(client);
