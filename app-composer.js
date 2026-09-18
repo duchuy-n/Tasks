@@ -74,14 +74,24 @@
       item.className = "subtask-item";
       item.classList.toggle("is-done", Boolean(subtask.done));
 
+      const toggleField = document.createElement("label");
+      toggleField.className = "subtask-item__check";
+
       const toggle = document.createElement("input");
       toggle.type = "checkbox";
+      toggle.className = "subtask-item__toggle";
       toggle.checked = Boolean(subtask.done);
+      toggle.setAttribute("aria-label", `Mark subtask ${subtask.text} as ${subtask.done ? "active" : "complete"}`);
       toggle.addEventListener("change", () => {
         if (typeof onUpdateSubtask === "function") {
           onUpdateSubtask(subtask.id, { done: toggle.checked });
         }
       });
+
+      const toggleVisual = document.createElement("span");
+      toggleVisual.className = "subtask-item__box";
+      toggleVisual.setAttribute("aria-hidden", "true");
+      toggleField.append(toggle, toggleVisual);
 
       const text = document.createElement("input");
       text.type = "text";
@@ -104,7 +114,7 @@
         }
       });
 
-      item.append(toggle, text, remove);
+      item.append(toggleField, text, remove);
       dom.detailSubtaskList.appendChild(item);
     });
 

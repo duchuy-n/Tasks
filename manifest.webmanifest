@@ -1,7 +1,7 @@
 {
   "name": "planner.",
   "short_name": "planner.",
-  "description": "A focused weekly planner with board, calendar, portfolio, and daily routines.",
+  "description": "A focused planner for tasks, calendar scheduling, and portfolio tracking.",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#111727",

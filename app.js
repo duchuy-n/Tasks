@@ -1637,7 +1637,7 @@ async function hydrateSession() {
       showApp();
       render();
       startAutoSync();
-      setStatus("Ready.");
+      setStatus("");
       return;
     } catch (error) {
       setAuthMessage(error.message, true);
@@ -1656,7 +1656,7 @@ async function hydrateSession() {
     showApp();
     render();
     startAutoSync();
-    setStatus("Ready.");
+    setStatus("");
   } catch (error) {
     if (error.status === 401) {
       clearSession(true);
@@ -1912,12 +1912,22 @@ function renderDetailSubtasks(subtasks) {
     item.className = "subtask-item";
     item.classList.toggle("is-done", Boolean(subtask.done));
 
+    const toggleField = document.createElement("label");
+    toggleField.className = "subtask-item__check";
+
     const toggle = document.createElement("input");
     toggle.type = "checkbox";
+    toggle.className = "subtask-item__toggle";
     toggle.checked = Boolean(subtask.done);
+    toggle.setAttribute("aria-label", `Mark subtask ${subtask.text} as ${subtask.done ? "active" : "complete"}`);
     toggle.addEventListener("change", () => {
       updateDetailSubtask(subtask.id, { done: toggle.checked });
     });
+
+    const toggleVisual = document.createElement("span");
+    toggleVisual.className = "subtask-item__box";
+    toggleVisual.setAttribute("aria-hidden", "true");
+    toggleField.append(toggle, toggleVisual);
 
     const text = document.createElement("input");
     text.type = "text";
@@ -1936,7 +1946,7 @@ function renderDetailSubtasks(subtasks) {
       removeDetailSubtask(subtask.id);
     });
 
-    item.append(toggle, text, remove);
+    item.append(toggleField, text, remove);
     detailSubtaskList.appendChild(item);
   });
 
@@ -3319,6 +3329,9 @@ function renderCardSubtasks(target, toggleButton, entries, expansionKey, taskDon
     const label = document.createElement("label");
     label.className = "task-card__subtask-label";
 
+    const toggleControl = document.createElement("span");
+    toggleControl.className = "task-card__subtask-control";
+
     const toggle = document.createElement("input");
     toggle.type = "checkbox";
     toggle.className = "task-card__subtask-toggle";
@@ -3328,6 +3341,11 @@ function renderCardSubtasks(target, toggleButton, entries, expansionKey, taskDon
       event.stopPropagation();
       await updateTodoCardSubtask(todo, subtask.id, toggle.checked);
     });
+
+    const toggleVisual = document.createElement("span");
+    toggleVisual.className = "task-card__subtask-box";
+    toggleVisual.setAttribute("aria-hidden", "true");
+    toggleControl.append(toggle, toggleVisual);
 
     const text = document.createElement("span");
     text.className = "task-card__subtask-text";
@@ -3340,7 +3358,7 @@ function renderCardSubtasks(target, toggleButton, entries, expansionKey, taskDon
       text.textContent = subtask.text;
     }
 
-    label.append(toggle, text);
+    label.append(toggleControl, text);
     item.appendChild(label);
     target.appendChild(item);
   });
