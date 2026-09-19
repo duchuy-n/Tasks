@@ -170,6 +170,97 @@ test("daily task keeps streak during the day after completion", () => {
   assert.equal(domain.resetMissedDailyStreak(current, new Date("2026-05-02T02:00:00Z")), current);
 });
 
+test("daily subtasks reset after the Vietnam calendar day changes", () => {
+  const previousDay = {
+    id: "daily-subtasks-reset",
+    daily: true,
+    dailyCompletedOn: "2026-05-01",
+    updatedAt: "2026-05-01T12:00:00Z",
+    subtasks: [
+      { id: "one", text: "First", done: true, completedOn: "2026-05-01" },
+      { id: "two", text: "Second", done: true, completedOn: "2026-05-01" },
+    ],
+  };
+  const reset = domain.resetDailySubtasksForToday(previousDay, new Date("2026-05-02T02:00:00Z"));
+  assert.deepEqual(reset.subtasks.map((subtask) => subtask.done), [false, false]);
+  assert.deepEqual(reset.subtasks.map((subtask) => subtask.completedOn), [null, null]);
+  assert.equal(reset.dailyCompletedOn, "2026-05-01");
+});
+
+test("legacy daily subtasks without completion dates migrate safely", () => {
+  const nextDay = domain.resetDailySubtasksForToday(
+    {
+      id: "legacy-daily-reset",
+      daily: true,
+      dailyCompletedOn: "2026-05-01",
+      updatedAt: "2026-05-01T12:00:00Z",
+      subtasks: [
+        { id: "one", text: "First", done: true },
+        { id: "two", text: "Second", done: true },
+      ],
+    },
+    new Date("2026-05-02T02:00:00Z")
+  );
+  assert.deepEqual(nextDay.subtasks.map((subtask) => subtask.done), [false, false]);
+
+  const sameDay = domain.resetDailySubtasksForToday(
+    {
+      id: "legacy-daily-current",
+      daily: true,
+      dailyCompletedOn: "2026-05-02",
+      updatedAt: "2026-05-02T02:00:00Z",
+      subtasks: [{ id: "one", text: "First", done: true }],
+    },
+    new Date("2026-05-02T03:00:00Z")
+  );
+  assert.equal(sameDay.subtasks[0].done, true);
+  assert.equal(sameDay.subtasks[0].completedOn, "2026-05-02");
+
+  const partialToday = domain.resetDailySubtasksForToday(
+    {
+      id: "legacy-daily-partial",
+      daily: true,
+      dailyCompletedOn: "2026-05-01",
+      updatedAt: "2026-05-02T02:00:00Z",
+      subtasks: [
+        { id: "one", text: "First", done: true },
+        { id: "two", text: "Second", done: false },
+      ],
+    },
+    new Date("2026-05-02T03:00:00Z")
+  );
+  assert.equal(partialToday.subtasks[0].done, true);
+  assert.equal(partialToday.subtasks[0].completedOn, "2026-05-02");
+  assert.equal(partialToday.subtasks[1].done, false);
+});
+
+test("daily subtask progress survives refreshes within the same day", () => {
+  const current = {
+    id: "daily-subtasks-current",
+    daily: true,
+    dailyCompletedOn: "2026-05-01",
+    subtasks: [
+      { id: "one", text: "First", done: true, completedOn: "2026-05-02" },
+      { id: "two", text: "Second", done: false, completedOn: null },
+    ],
+  };
+  const normalized = domain.resetDailySubtasksForToday(current, new Date("2026-05-02T02:00:00Z"));
+  assert.equal(normalized, current);
+});
+
+test("completing a daily task stamps completed subtasks with today's date", () => {
+  const completed = domain.completeDailyTodo(
+    {
+      id: "daily-subtask-stamp",
+      daily: true,
+      dailyCompletedOn: "2026-05-01",
+      subtasks: [{ id: "one", text: "First", done: true }],
+    },
+    new Date("2026-05-02T02:00:00Z")
+  );
+  assert.equal(completed.subtasks[0].completedOn, "2026-05-02");
+});
+
 test("starting lane inference honors daily, explicit lane, and due dates", () => {
   assert.equal(domain.inferStartingLane("", null, true, "2026-05-02"), "today");
   assert.equal(domain.inferStartingLane("week", "2026-06-20", false, "2026-05-02"), "week");
@@ -236,9 +327,23 @@ test("reopening a daily subtask clears that day's parent completion", () => {
     done: false,
     dailyCompletedOn: "2026-09-18",
     subtasks: [{ done: true }, { done: false }],
-  });
+  }, new Date("2026-09-18T02:00:00Z"));
   assert.equal(reconciled.done, false);
   assert.equal(reconciled.dailyCompletedOn, null);
+});
+
+test("starting today's daily subtasks keeps the previous completion marker", () => {
+  const previous = {
+    daily: true,
+    done: false,
+    dailyCompletedOn: "2026-09-18",
+    streak: 6,
+    subtasks: [{ done: true }, { done: false }],
+  };
+  const reconciled = domain.reconcileTodoDoneWithSubtasks(previous, new Date("2026-09-19T02:00:00Z"));
+  assert.equal(reconciled, previous);
+  assert.equal(reconciled.dailyCompletedOn, "2026-09-18");
+  assert.equal(reconciled.streak, 6);
 });
 
 require("../app-state.js");

@@ -292,6 +292,79 @@ class PlanboardServerTest(unittest.TestCase):
         self.assertEqual(status, HTTPStatus.BAD_REQUEST)
         self.assertEqual(payload["error"], "Complete every subtask before completing this task.")
 
+    def test_daily_subtasks_reset_without_losing_previous_completion_date(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Daily Reset", "email": "daily-reset@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+        previous_date = "2020-01-01"
+        completed_subtasks = [
+            {"id": "step-1", "text": "First step", "done": True, "completedOn": previous_date},
+            {"id": "step-2", "text": "Second step", "done": True, "completedOn": previous_date},
+        ]
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos",
+            {
+                "title": "Daily reset routine",
+                "daily": True,
+                "dailyCompletedOn": previous_date,
+                "streak": 4,
+                "subtasks": completed_subtasks,
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        todo = payload["todo"]
+        self.assertEqual(todo["subtasks"][0]["completedOn"], previous_date)
+
+        reset_subtasks = [
+            {**subtask, "done": False, "completedOn": None}
+            for subtask in todo["subtasks"]
+        ]
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/todos/{todo['id']}",
+            {**todo, "subtasks": reset_subtasks},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+        reset_todo = payload["todo"]
+        self.assertEqual(reset_todo["dailyCompletedOn"], previous_date)
+        self.assertEqual(reset_todo["streak"], 4)
+        self.assertTrue(all(not subtask["done"] for subtask in reset_todo["subtasks"]))
+
+        partial_subtasks = [
+            {
+                **subtask,
+                "done": index == 0,
+                "completedOn": server.vietnam_today_iso() if index == 0 else None,
+            }
+            for index, subtask in enumerate(reset_todo["subtasks"])
+        ]
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/todos/{todo['id']}",
+            {**reset_todo, "subtasks": partial_subtasks},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+        partial_todo = payload["todo"]
+        self.assertTrue(partial_todo["subtasks"][0]["done"])
+        self.assertEqual(partial_todo["subtasks"][0]["completedOn"], server.vietnam_today_iso())
+
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/todos/{todo['id']}",
+            {**partial_todo, "dailyCompletedOn": server.vietnam_today_iso()},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+        self.assertEqual(payload["error"], "Complete every subtask before completing this task.")
+
     def test_project_batch_completion_is_atomic_and_versioned(self) -> None:
         status, _, payload = self.request(
             "POST",
@@ -502,6 +575,172 @@ class PlanboardServerTest(unittest.TestCase):
         self.assertEqual(todo["details"], "Plain note")
         self.assertEqual(todo["projectId"], "project-1")
         self.assertEqual(todo["projectTitle"], "Exam prep")
+
+    def test_subtask_limit_is_rejected_instead_of_truncated(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Subtask Limit", "email": "subtask-limit@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos",
+            {
+                "title": "Too many steps",
+                "subtasks": [
+                    {"id": f"step-{index}", "text": f"Step {index}", "done": False}
+                    for index in range(33)
+                ],
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+        self.assertEqual(payload["error"], "A task can have at most 32 subtasks.")
+
+    def test_completed_todo_can_be_recreated_for_undo(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Undo Restore", "email": "undo-restore@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos",
+            {
+                "title": "Restore completed task",
+                "done": True,
+                "subtasks": [{"id": "done-step", "text": "Finished", "done": True}],
+            },
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        self.assertTrue(payload["todo"]["done"])
+
+    def test_plan_and_portfolio_updates_reject_stale_versions(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Version Guard", "email": "version-guard@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/plans",
+            {"planDate": "2026-09-19", "timeLabel": "10:00", "title": "Original plan", "details": ""},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        plan = payload["plan"]
+        status, _, _ = self.request(
+            "PUT",
+            f"/api/plans/{plan['id']}",
+            {**plan, "title": "Updated elsewhere", "expectedUpdatedAt": plan["updatedAt"]},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/plans/{plan['id']}",
+            {**plan, "title": "Stale update", "expectedUpdatedAt": plan["updatedAt"]},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CONFLICT)
+        self.assertIn("another device", payload["error"])
+        status, _, payload = self.request(
+            "DELETE",
+            f"/api/plans/{plan['id']}",
+            {"expectedUpdatedAt": plan["updatedAt"]},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CONFLICT)
+        self.assertIn("another device", payload["error"])
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/portfolio",
+            {"type": "project", "title": "Original portfolio"},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        item = payload["portfolioItem"]
+        status, _, _ = self.request(
+            "PUT",
+            f"/api/portfolio/{item['id']}",
+            {**item, "title": "Updated elsewhere", "expectedUpdatedAt": item["updatedAt"]},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/portfolio/{item['id']}",
+            {**item, "title": "Stale update", "expectedUpdatedAt": item["updatedAt"]},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CONFLICT)
+        self.assertIn("another device", payload["error"])
+        status, _, payload = self.request(
+            "DELETE",
+            f"/api/portfolio/{item['id']}",
+            {"expectedUpdatedAt": item["updatedAt"]},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CONFLICT)
+        self.assertIn("another device", payload["error"])
+
+    def test_scoped_clear_and_delete_version_guard_preserve_other_tasks(self) -> None:
+        status, _, payload = self.request(
+            "POST",
+            "/api/auth/register",
+            {"name": "Delete Guard", "email": "delete-guard@example.com", "password": "password123"},
+        )
+        self.assertEqual(status, HTTPStatus.CREATED)
+        token = payload["token"]
+        completed = []
+        for title in ("Clear this", "Keep this"):
+            status, _, payload = self.request(
+                "POST",
+                "/api/todos",
+                {"title": title, "done": True},
+                token=token,
+            )
+            self.assertEqual(status, HTTPStatus.CREATED)
+            completed.append(payload["todo"])
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/todos/clear-completed",
+            {"ids": [completed[0]["id"]]},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["deletedIds"], [completed[0]["id"]])
+        status, _, bootstrap = self.request("GET", "/api/bootstrap", token=token)
+        self.assertEqual([todo["id"] for todo in bootstrap["todos"]], [completed[1]["id"]])
+
+        kept = bootstrap["todos"][0]
+        status, _, payload = self.request(
+            "PUT",
+            f"/api/todos/{kept['id']}",
+            {**kept, "title": "Changed elsewhere", "expectedUpdatedAt": kept["updatedAt"]},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+        status, _, payload = self.request(
+            "DELETE",
+            f"/api/todos/{kept['id']}",
+            {"expectedUpdatedAt": kept["updatedAt"]},
+            token=token,
+        )
+        self.assertEqual(status, HTTPStatus.CONFLICT)
+        self.assertIn("another device", payload["error"])
+        status, _, bootstrap = self.request("GET", "/api/bootstrap", token=token)
+        self.assertEqual(len(bootstrap["todos"]), 1)
 
     def test_legacy_task_markers_are_cleaned(self) -> None:
         status, _, payload = self.request(

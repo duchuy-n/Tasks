@@ -217,7 +217,10 @@
     if (!Array.isArray(value)) {
       throw createError("Subtasks must be a list.", 400);
     }
-    return value.slice(0, 32).map((item) => {
+    if (value.length > 32) {
+      throw createError("A task can have at most 32 subtasks.", 400);
+    }
+    return value.map((item) => {
       if (!item || typeof item !== "object") {
         throw createError("Each subtask must be an object.", 400);
       }
@@ -228,11 +231,13 @@
       if (!text && !days.length) {
         return null;
       }
+      const completedOn = normalizeDateInput(item.completedOn);
       return {
         id: String(item.id || crypto.randomUUID()),
         text: text.slice(0, 120),
         done: Boolean(item.done),
         days,
+        completedOn: completedOn && isValidDate(completedOn) ? completedOn : null,
       };
     }).filter(Boolean);
   }
@@ -756,6 +761,7 @@
     const timeLabel = String(body.timeLabel || "").trim();
     const title = String(body.title || "").trim();
     const details = String(body.details || "").trim();
+    const expectedUpdatedAt = String(body.expectedUpdatedAt || "").trim();
     if (!isValidDate(planDate)) {
       throw createError("Plan date is invalid.", 400);
     }
@@ -767,27 +773,42 @@
     }
     const user = await requireUser(client);
     const ref = planDocRef(client, user.uid, planId);
-    const snapshot = await client.firestoreMod.getDoc(ref);
-    if (!snapshot.exists()) {
-      throw createError("Plan not found.", 404);
-    }
-    const previous = snapshot.data() || {};
-    const plan = {
-      id: planId,
-      planDate,
-      timeLabel,
-      title,
-      details,
-      createdAt: String(previous.createdAt || nowIso()),
-      updatedAt: nowIso(),
-    };
-    await client.firestoreMod.setDoc(ref, plan);
+    let plan = null;
+    await client.firestoreMod.runTransaction(client.db, async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists()) {
+        throw createError("Plan not found.", 404);
+      }
+      const previous = snapshot.data() || {};
+      if (expectedUpdatedAt && expectedUpdatedAt !== String(previous.updatedAt || "")) {
+        throw createError("Plan changed on another device. Refresh and try again.", 409);
+      }
+      plan = {
+        id: planId,
+        planDate,
+        timeLabel,
+        title,
+        details,
+        createdAt: String(previous.createdAt || nowIso()),
+        updatedAt: nowIso(),
+      };
+      transaction.set(ref, plan);
+    });
     return { plan };
   }
 
-  async function handleDeletePlan(client, planId) {
+  async function handleDeletePlan(client, planId, options) {
+    const expectedUpdatedAt = String(requireBody(options).expectedUpdatedAt || "").trim();
     const user = await requireUser(client);
-    await client.firestoreMod.deleteDoc(planDocRef(client, user.uid, planId));
+    const ref = planDocRef(client, user.uid, planId);
+    await client.firestoreMod.runTransaction(client.db, async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists()) throw createError("Plan not found.", 404);
+      if (expectedUpdatedAt && expectedUpdatedAt !== String(snapshot.data().updatedAt || "")) {
+        throw createError("Plan changed on another device. Refresh and try again.", 409);
+      }
+      transaction.delete(ref);
+    });
     return { ok: true };
   }
 
@@ -805,23 +826,40 @@
 
   async function handleUpdatePortfolioItem(client, itemId, options) {
     const body = requireBody(options);
+    const expectedUpdatedAt = String(body.expectedUpdatedAt || "").trim();
     const user = await requireUser(client);
     const ref = portfolioDocRef(client, user.uid, itemId);
-    const snapshot = await client.firestoreMod.getDoc(ref);
-    if (!snapshot.exists()) {
-      throw createError("Portfolio item not found.", 404);
-    }
-    const item = {
-      id: itemId,
-      ...normalizePortfolioPayload(body, snapshot.data() || {}),
-    };
-    await client.firestoreMod.setDoc(ref, item);
+    let item = null;
+    await client.firestoreMod.runTransaction(client.db, async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists()) {
+        throw createError("Portfolio item not found.", 404);
+      }
+      const previous = snapshot.data() || {};
+      if (expectedUpdatedAt && expectedUpdatedAt !== String(previous.updatedAt || "")) {
+        throw createError("Portfolio item changed on another device. Refresh and try again.", 409);
+      }
+      item = {
+        id: itemId,
+        ...normalizePortfolioPayload(body, previous),
+      };
+      transaction.set(ref, item);
+    });
     return { portfolioItem: item };
   }
 
-  async function handleDeletePortfolioItem(client, itemId) {
+  async function handleDeletePortfolioItem(client, itemId, options) {
+    const expectedUpdatedAt = String(requireBody(options).expectedUpdatedAt || "").trim();
     const user = await requireUser(client);
-    await client.firestoreMod.deleteDoc(portfolioDocRef(client, user.uid, itemId));
+    const ref = portfolioDocRef(client, user.uid, itemId);
+    await client.firestoreMod.runTransaction(client.db, async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists()) throw createError("Portfolio item not found.", 404);
+      if (expectedUpdatedAt && expectedUpdatedAt !== String(snapshot.data().updatedAt || "")) {
+        throw createError("Portfolio item changed on another device. Refresh and try again.", 409);
+      }
+      transaction.delete(ref);
+    });
     return { ok: true };
   }
 
@@ -913,10 +951,6 @@
     const finalLane = daily ? "today" : lane;
     const done = daily ? false : Boolean(body.done);
     const subtasks = normalizeSubtasks(body.subtasks);
-    const completesNow = done || (daily && Boolean(dailyCompletedOn));
-    if (completesNow && hasIncompleteSubtasks(subtasks)) {
-      throw createError("Complete every subtask before completing this task.", 400);
-    }
     const sortOrder = normalizeSortOrder(body.sortOrder, 0);
     const projectId = String(body.projectId || "").trim().slice(0, 160);
     const projectTitle = String(body.projectTitle || "").trim().slice(0, 160);
@@ -956,6 +990,14 @@
       const previous = snapshot.data() || {};
       if (expectedUpdatedAt && expectedUpdatedAt !== String(previous.updatedAt || "")) {
         throw createError("Task changed on another device. Refresh and try again.", 409);
+      }
+      const completesNow = done || (
+        daily
+        && Boolean(dailyCompletedOn)
+        && dailyCompletedOn !== (previous.dailyCompletedOn || null)
+      );
+      if (completesNow && hasIncompleteSubtasks(subtasks)) {
+        throw createError("Complete every subtask before completing this task.", 400);
       }
       todo = {
         id: todoId,
@@ -1137,7 +1179,11 @@
         if (update.expectedUpdatedAt && update.expectedUpdatedAt !== String(previous.updatedAt || "")) {
           throw createError("Task changed on another device. Refresh and try again.", 409);
         }
-        const completesNow = update.done || (previous.daily && Boolean(update.dailyCompletedOn));
+        const completesNow = update.done || (
+          previous.daily
+          && Boolean(update.dailyCompletedOn)
+          && update.dailyCompletedOn !== (previous.dailyCompletedOn || null)
+        );
         if (completesNow && hasIncompleteSubtasks(previous.subtasks)) {
           throw createError("Complete every subtask before completing this task.", 400);
         }
@@ -1159,19 +1205,26 @@
     return { todos: savedTodos };
   }
 
-  async function handleClearCompleted(client) {
+  async function handleClearCompleted(client, options) {
+    const body = requireBody(options);
+    const scopedIds = Array.isArray(body.ids)
+      ? new Set(body.ids.map((id) => String(id || "").trim()).filter(Boolean))
+      : null;
+    if (scopedIds && scopedIds.size > 500) {
+      throw createError("Task ids are invalid.", 400);
+    }
     const user = await requireUser(client);
     const todos = await getAllTodos(client, user.uid);
-    const completed = todos.filter((todo) => todo.done);
+    const completed = todos.filter((todo) => todo.done && (!scopedIds || scopedIds.has(todo.id)));
     if (!completed.length) {
-      return { ok: true };
+      return { ok: true, deletedIds: [] };
     }
     const batch = client.firestoreMod.writeBatch(client.db);
     completed.forEach((todo) => {
       batch.delete(todoDocRef(client, user.uid, todo.id));
     });
     await batch.commit();
-    return { ok: true };
+    return { ok: true, deletedIds: completed.map((todo) => todo.id) };
   }
 
   async function handleResetWorkspace(client) {
@@ -1194,9 +1247,18 @@
     return { ok: true };
   }
 
-  async function handleDeleteTodo(client, todoId) {
+  async function handleDeleteTodo(client, todoId, options) {
+    const expectedUpdatedAt = String(requireBody(options).expectedUpdatedAt || "").trim();
     const user = await requireUser(client);
-    await client.firestoreMod.deleteDoc(todoDocRef(client, user.uid, todoId));
+    const ref = todoDocRef(client, user.uid, todoId);
+    await client.firestoreMod.runTransaction(client.db, async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists()) throw createError("Task not found.", 404);
+      if (expectedUpdatedAt && expectedUpdatedAt !== String(snapshot.data().updatedAt || "")) {
+        throw createError("Task changed on another device. Refresh and try again.", 409);
+      }
+      transaction.delete(ref);
+    });
     return { ok: true };
   }
 
@@ -1247,7 +1309,7 @@
         return handleBatchTodoCompletion(client, options);
       }
       if (path === "/todos/clear-completed" && (options.method || "GET") === "POST") {
-        return handleClearCompleted(client);
+        return handleClearCompleted(client, options);
       }
       if (path === "/reset" && (options.method || "GET") === "POST") {
         return handleResetWorkspace(client);
@@ -1266,13 +1328,13 @@
         return handleUpdatePlan(client, planMatch[1], options);
       }
       if (planMatch && (options.method || "GET") === "DELETE") {
-        return handleDeletePlan(client, planMatch[1]);
+        return handleDeletePlan(client, planMatch[1], options);
       }
       if (portfolioMatch && (options.method || "GET") === "PUT") {
         return handleUpdatePortfolioItem(client, portfolioMatch[1], options);
       }
       if (portfolioMatch && (options.method || "GET") === "DELETE") {
-        return handleDeletePortfolioItem(client, portfolioMatch[1]);
+        return handleDeletePortfolioItem(client, portfolioMatch[1], options);
       }
       if (todoLaneMatch && (options.method || "GET") === "PUT") {
         return handleUpdateTodoLane(client, todoLaneMatch[1], todoLaneMatch[2]);
@@ -1281,7 +1343,7 @@
         return handleUpdateTodo(client, todoMatch[1], options);
       }
       if (todoMatch && (options.method || "GET") === "DELETE") {
-        return handleDeleteTodo(client, todoMatch[1]);
+        return handleDeleteTodo(client, todoMatch[1], options);
       }
 
       throw createError("Not found", 404);

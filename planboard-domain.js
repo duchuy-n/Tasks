@@ -47,7 +47,36 @@
       dailyCompletedOn: completedOn,
       dailyResetAfterDays: resetAfterDays,
       streak: todo.dailyCompletedOn === completedOn ? previousStreak : keepMomentum ? previousStreak + 1 : 1,
+      subtasks: Array.isArray(todo.subtasks)
+        ? todo.subtasks.map((subtask) => Boolean(subtask.done)
+          ? { ...subtask, completedOn }
+          : { ...subtask })
+        : [],
     };
+  }
+
+  function resetDailySubtasksForToday(todo, now = new Date()) {
+    if (!todo || !todo.daily || !Array.isArray(todo.subtasks) || !todo.subtasks.length) {
+      return todo;
+    }
+    const today = vietnamTodayIso(now);
+    const validUpdatedAt = new Date(todo.updatedAt || "");
+    const updatedToday = !Number.isNaN(validUpdatedAt.getTime()) && vietnamTodayIso(validUpdatedAt) === today;
+    const allLegacyDone = todo.subtasks.every((subtask) => Boolean(subtask.done) && !validIsoDay(subtask.completedOn));
+    const preserveLegacyDone = todo.dailyCompletedOn === today || (updatedToday && !allLegacyDone);
+    let changed = false;
+    const subtasks = todo.subtasks.map((subtask) => {
+      const completedOn = validIsoDay(subtask.completedOn);
+      const legacyDoneToday = !completedOn && Boolean(subtask.done) && preserveLegacyDone;
+      const nextDone = completedOn === today || legacyDoneToday;
+      const nextCompletedOn = nextDone ? today : null;
+      if (Boolean(subtask.done) === nextDone && (subtask.completedOn || null) === nextCompletedOn) {
+        return subtask;
+      }
+      changed = true;
+      return { ...subtask, done: nextDone, completedOn: nextCompletedOn };
+    });
+    return changed ? { ...todo, subtasks } : todo;
   }
 
   function shouldResetDailyStreak(todo, now = new Date()) {
@@ -161,12 +190,14 @@
     return subtasks.length > 0 && !subtasks.every((subtask) => Boolean(subtask.done));
   }
 
-  function reconcileTodoDoneWithSubtasks(todo) {
+  function reconcileTodoDoneWithSubtasks(todo, now = new Date()) {
     if (!todo || !todoCompletionBlocked(todo)) {
       return todo;
     }
     if (todo.daily) {
-      return { ...todo, dailyCompletedOn: null };
+      return todo.dailyCompletedOn === vietnamTodayIso(now)
+        ? { ...todo, dailyCompletedOn: null }
+        : todo;
     }
     return { ...todo, done: false };
   }
@@ -179,6 +210,7 @@
     previousIsoDate,
     isDailyCompletedToday,
     completeDailyTodo,
+    resetDailySubtasksForToday,
     shouldResetDailyStreak,
     resetMissedDailyStreak,
     dailyResetCountdownText,

@@ -489,9 +489,11 @@ def normalize_subtasks(value: object) -> list[dict]:
         return []
     if not isinstance(value, list):
         raise ValueError("Subtasks must be a list.")
+    if len(value) > 32:
+        raise ValueError("A task can have at most 32 subtasks.")
 
     normalized = []
-    for item in value[:32]:
+    for item in value:
         if not isinstance(item, dict):
             raise ValueError("Each subtask must be an object.")
         text = str(item.get("text", "")).strip()
@@ -502,12 +504,16 @@ def normalize_subtasks(value: object) -> list[dict]:
         ][:7]
         if not text and not days:
             continue
+        completed_on = str(item.get("completedOn") or "").strip() or None
+        if completed_on and not is_valid_date(completed_on):
+            completed_on = None
         normalized.append(
             {
                 "id": str(item.get("id") or uuid4()),
                 "text": text[:120],
                 "done": bool(item.get("done")),
                 "days": days,
+                "completedOn": completed_on,
             }
         )
     return normalized
@@ -1173,8 +1179,28 @@ class PlanboardHandler(BaseHTTPRequestHandler):
 
     def handle_delete_plan(self, plan_id: str) -> None:
         try:
+            payload = self.parse_json()
+        except ValueError:
+            return
+        expected_updated_at = str(payload.get("expectedUpdatedAt") or "").strip()
+        try:
             connection, user = self.auth_user()
         except PermissionError:
+            return
+        plan = connection.execute(
+            "SELECT updated_at FROM plans WHERE id = ? AND user_id = ?",
+            (plan_id, user["id"]),
+        ).fetchone()
+        if not plan:
+            connection.close()
+            self.respond_json({"error": "Plan not found."}, HTTPStatus.NOT_FOUND)
+            return
+        if expected_updated_at and expected_updated_at != str(plan["updated_at"] or ""):
+            connection.close()
+            self.respond_json(
+                {"error": "Plan changed on another device. Refresh and try again."},
+                HTTPStatus.CONFLICT,
+            )
             return
         with connection:
             connection.execute("DELETE FROM plans WHERE id = ? AND user_id = ?", (plan_id, user["id"]))
@@ -1191,6 +1217,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         time_label = str(payload.get("timeLabel", "")).strip()
         title = str(payload.get("title", "")).strip()
         details = str(payload.get("details", "")).strip()
+        expected_updated_at = str(payload.get("expectedUpdatedAt") or "").strip()
         if not is_valid_date(plan_date):
             self.respond_json({"error": "Plan date is invalid."}, HTTPStatus.BAD_REQUEST)
             return
@@ -1211,22 +1238,51 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         except PermissionError:
             return
 
+        existing = connection.execute(
+            "SELECT updated_at FROM plans WHERE id = ? AND user_id = ?",
+            (plan_id, user["id"]),
+        ).fetchone()
+        if not existing:
+            connection.close()
+            self.respond_json({"error": "Plan not found."}, HTTPStatus.NOT_FOUND)
+            return
+        if expected_updated_at and expected_updated_at != str(existing["updated_at"] or ""):
+            connection.close()
+            self.respond_json(
+                {"error": "Plan changed on another device. Refresh and try again."},
+                HTTPStatus.CONFLICT,
+            )
+            return
+
         with connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE plans
                 SET plan_date = ?, time_label = ?, title = ?, details = ?, updated_at = ?
-                WHERE id = ? AND user_id = ?
+                WHERE id = ? AND user_id = ? AND (? = '' OR updated_at = ?)
                 """,
-                (plan_date, time_label, title, details, now_iso(), plan_id, user["id"]),
+                (
+                    plan_date,
+                    time_label,
+                    title,
+                    details,
+                    now_iso(),
+                    plan_id,
+                    user["id"],
+                    expected_updated_at,
+                    expected_updated_at,
+                ),
             )
             plan = connection.execute(
                 "SELECT * FROM plans WHERE id = ? AND user_id = ?",
                 (plan_id, user["id"]),
-            ).fetchone()
+            ).fetchone() if cursor.rowcount == 1 else None
         connection.close()
-        if not plan:
-            self.respond_json({"error": "Plan not found."}, HTTPStatus.NOT_FOUND)
+        if cursor.rowcount != 1:
+            self.respond_json(
+                {"error": "Plan changed on another device. Refresh and try again."},
+                HTTPStatus.CONFLICT,
+            )
             return
         self.respond_json({"plan": serialize_plan(plan)})
 
@@ -1467,6 +1523,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             payload = self.parse_json()
         except ValueError:
             return
+        expected_updated_at = str(payload.get("expectedUpdatedAt") or "").strip()
 
         try:
             connection, user = self.auth_user()
@@ -1481,6 +1538,13 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             connection.close()
             self.respond_json({"error": "Portfolio item not found."}, HTTPStatus.NOT_FOUND)
             return
+        if expected_updated_at and expected_updated_at != str(existing["updated_at"] or ""):
+            connection.close()
+            self.respond_json(
+                {"error": "Portfolio item changed on another device. Refresh and try again."},
+                HTTPStatus.CONFLICT,
+            )
+            return
 
         try:
             item_data = normalize_portfolio_payload(payload, existing["created_at"])
@@ -1490,13 +1554,13 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
 
         with connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE portfolio_items
                 SET type = ?, title = ?, organization = ?, role = ?, teammates = ?,
                     start_date = ?, end_date = ?, status = ?, status_mode = ?, cert = ?, achievement = ?,
                     links = ?, notes = ?, updated_at = ?
-                WHERE id = ? AND user_id = ?
+                WHERE id = ? AND user_id = ? AND (? = '' OR updated_at = ?)
                 """,
                 (
                     item_data["type"],
@@ -1515,19 +1579,47 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                     item_data["updated_at"],
                     item_id,
                     user["id"],
+                    expected_updated_at,
+                    expected_updated_at,
                 ),
             )
             item = connection.execute(
                 "SELECT * FROM portfolio_items WHERE id = ? AND user_id = ?",
                 (item_id, user["id"]),
-            ).fetchone()
+            ).fetchone() if cursor.rowcount == 1 else None
         connection.close()
+        if cursor.rowcount != 1:
+            self.respond_json(
+                {"error": "Portfolio item changed on another device. Refresh and try again."},
+                HTTPStatus.CONFLICT,
+            )
+            return
         self.respond_json({"portfolioItem": serialize_portfolio_item(item)})
 
     def handle_delete_portfolio_item(self, item_id: str) -> None:
         try:
+            payload = self.parse_json()
+        except ValueError:
+            return
+        expected_updated_at = str(payload.get("expectedUpdatedAt") or "").strip()
+        try:
             connection, user = self.auth_user()
         except PermissionError:
+            return
+        item = connection.execute(
+            "SELECT updated_at FROM portfolio_items WHERE id = ? AND user_id = ?",
+            (item_id, user["id"]),
+        ).fetchone()
+        if not item:
+            connection.close()
+            self.respond_json({"error": "Portfolio item not found."}, HTTPStatus.NOT_FOUND)
+            return
+        if expected_updated_at and expected_updated_at != str(item["updated_at"] or ""):
+            connection.close()
+            self.respond_json(
+                {"error": "Portfolio item changed on another device. Refresh and try again."},
+                HTTPStatus.CONFLICT,
+            )
             return
         with connection:
             connection.execute(
@@ -1552,6 +1644,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         lane = str(payload.get("lane", "ideas")).strip().lower() or "ideas"
         priority = str(payload.get("priority", "medium")).strip().lower()
         daily = 1 if bool(payload.get("daily")) else 0
+        done = 1 if bool(payload.get("done")) else 0
         daily_completed_on = str(payload.get("dailyCompletedOn") or "").strip() or None
         try:
             subtasks = normalize_subtasks(payload.get("subtasks"))
@@ -1568,7 +1661,8 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
         if daily:
             lane = "today"
-        if daily and daily_completed_on and has_incomplete_subtasks(subtasks):
+            done = 0
+        if (done or (daily and daily_completed_on)) and has_incomplete_subtasks(subtasks):
             self.respond_json(
                 {"error": "Complete every subtask before completing this task."},
                 HTTPStatus.BAD_REQUEST,
@@ -1613,7 +1707,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             connection.execute(
                 """
                 INSERT INTO todos (id, user_id, title, details, subtasks, due_date, lane, sort_order, priority, done, daily, daily_completed_on, streak, daily_reset_after_days, project_id, project_title, weekly_days, missed, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     todo_id,
@@ -1625,6 +1719,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                     lane,
                     final_sort_order,
                     priority,
+                    done,
                     daily,
                     daily_completed_on,
                     streak,
@@ -1675,13 +1770,6 @@ class PlanboardHandler(BaseHTTPRequestHandler):
         if daily:
             lane = "today"
             done = 0
-        completes_now = bool(done) or (bool(daily) and bool(daily_completed_on))
-        if completes_now and has_incomplete_subtasks(subtasks):
-            self.respond_json(
-                {"error": "Complete every subtask before completing this task."},
-                HTTPStatus.BAD_REQUEST,
-            )
-            return
         if daily_completed_on and not is_valid_date(daily_completed_on):
             self.respond_json({"error": "Daily completion date is invalid."}, HTTPStatus.BAD_REQUEST)
             return
@@ -1715,7 +1803,7 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             return
 
         existing = connection.execute(
-            "SELECT updated_at FROM todos WHERE id = ? AND user_id = ?",
+            "SELECT updated_at, daily_completed_on FROM todos WHERE id = ? AND user_id = ?",
             (todo_id, user["id"]),
         ).fetchone()
         if not existing:
@@ -1727,6 +1815,18 @@ class PlanboardHandler(BaseHTTPRequestHandler):
             self.respond_json(
                 {"error": "Task changed on another device. Refresh and try again."},
                 HTTPStatus.CONFLICT,
+            )
+            return
+        completes_now = bool(done) or (
+            bool(daily)
+            and bool(daily_completed_on)
+            and daily_completed_on != (str(existing["daily_completed_on"] or "").strip() or None)
+        )
+        if completes_now and has_incomplete_subtasks(subtasks):
+            connection.close()
+            self.respond_json(
+                {"error": "Complete every subtask before completing this task."},
+                HTTPStatus.BAD_REQUEST,
             )
             return
         with connection:
@@ -2001,7 +2101,11 @@ class PlanboardHandler(BaseHTTPRequestHandler):
                     except (ValueError, TypeError, json.JSONDecodeError):
                         subtasks = []
                     daily = bool(row["daily"])
-                    completes_now = update["done"] or (daily and bool(update["dailyCompletedOn"]))
+                    completes_now = update["done"] or (
+                        daily
+                        and bool(update["dailyCompletedOn"])
+                        and update["dailyCompletedOn"] != (str(row["daily_completed_on"] or "").strip() or None)
+                    )
                     if completes_now and has_incomplete_subtasks(subtasks):
                         raise ValueError("Complete every subtask before completing this task.")
 
@@ -2052,21 +2156,73 @@ class PlanboardHandler(BaseHTTPRequestHandler):
 
     def handle_clear_completed_todos(self) -> None:
         try:
-            connection, user = self.auth_user()
-        except PermissionError:
+            payload = self.parse_json()
+        except ValueError:
             return
-        with connection:
-            connection.execute(
-                "DELETE FROM todos WHERE user_id = ? AND done = 1",
-                (user["id"],),
-            )
-        connection.close()
-        self.respond_json({"ok": True})
-
-    def handle_delete_todo(self, todo_id: str) -> None:
+        raw_ids = payload.get("ids")
+        scoped_ids = None
+        if raw_ids is not None:
+            if not isinstance(raw_ids, list) or len(raw_ids) > 500:
+                self.respond_json({"error": "Task ids are invalid."}, HTTPStatus.BAD_REQUEST)
+                return
+            scoped_ids = list(dict.fromkeys(str(item).strip() for item in raw_ids if str(item).strip()))
+            if any(len(item) > 160 for item in scoped_ids):
+                self.respond_json({"error": "Task ids are invalid."}, HTTPStatus.BAD_REQUEST)
+                return
         try:
             connection, user = self.auth_user()
         except PermissionError:
+            return
+        if scoped_ids is not None and not scoped_ids:
+            connection.close()
+            self.respond_json({"ok": True, "deletedIds": []})
+            return
+        with connection:
+            if scoped_ids is None:
+                rows = connection.execute(
+                    "SELECT id FROM todos WHERE user_id = ? AND done = 1",
+                    (user["id"],),
+                ).fetchall()
+            else:
+                placeholders = ",".join("?" for _ in scoped_ids)
+                rows = connection.execute(
+                    f"SELECT id FROM todos WHERE user_id = ? AND done = 1 AND id IN ({placeholders})",
+                    (user["id"], *scoped_ids),
+                ).fetchall()
+            deleted_ids = [row["id"] for row in rows]
+            if deleted_ids:
+                placeholders = ",".join("?" for _ in deleted_ids)
+                connection.execute(
+                    f"DELETE FROM todos WHERE user_id = ? AND id IN ({placeholders})",
+                    (user["id"], *deleted_ids),
+                )
+        connection.close()
+        self.respond_json({"ok": True, "deletedIds": deleted_ids})
+
+    def handle_delete_todo(self, todo_id: str) -> None:
+        try:
+            payload = self.parse_json()
+        except ValueError:
+            return
+        expected_updated_at = str(payload.get("expectedUpdatedAt") or "").strip()
+        try:
+            connection, user = self.auth_user()
+        except PermissionError:
+            return
+        todo = connection.execute(
+            "SELECT updated_at FROM todos WHERE id = ? AND user_id = ?",
+            (todo_id, user["id"]),
+        ).fetchone()
+        if not todo:
+            connection.close()
+            self.respond_json({"error": "Task not found."}, HTTPStatus.NOT_FOUND)
+            return
+        if expected_updated_at and expected_updated_at != str(todo["updated_at"] or ""):
+            connection.close()
+            self.respond_json(
+                {"error": "Task changed on another device. Refresh and try again."},
+                HTTPStatus.CONFLICT,
+            )
             return
         with connection:
             connection.execute("DELETE FROM todos WHERE id = ? AND user_id = ?", (todo_id, user["id"]))

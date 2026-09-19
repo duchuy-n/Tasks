@@ -155,7 +155,11 @@
       button.type = "button";
       button.className = `task-action-move-list__button${currentLane === lane ? " is-active" : ""}`;
       button.textContent = laneLabel(lane);
-      button.disabled = currentLane === lane || (lane === "daily" && !todo.daily) || (lane === "done" && completionBlocked);
+      const dailyMoveBlocked = todo.daily && lane !== "daily" && lane !== "done";
+      button.disabled = currentLane === lane
+        || dailyMoveBlocked
+        || (lane === "daily" && !todo.daily)
+        || (lane === "done" && completionBlocked);
       if (lane === "done" && completionBlocked) {
         button.title = "Complete every subtask first";
       }
